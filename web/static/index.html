@@ -1,0 +1,1080 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kerkerker Douban Service - 管理面板</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg-primary: #0f0f1a;
+        --bg-secondary: #1a1a2e;
+        --bg-card: #16213e;
+        --accent: #e94560;
+        --accent-hover: #ff6b81;
+        --text-primary: #ffffff;
+        --text-secondary: #a0a0b0;
+        --success: #00d26a;
+        --warning: #ff9f43;
+        --error: #ff4757;
+        --border: rgba(255, 255, 255, 0.1);
+        --chart-1: #e94560;
+        --chart-2: #00d26a;
+        --chart-3: #ff9f43;
+        --chart-4: #5f27cd;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+        background: var(--bg-primary);
+        color: var(--text-primary);
+        min-height: 100vh;
+      }
+
+      .container {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+
+      /* Header */
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 20px 0;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 32px;
+      }
+
+      .logo {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .logo-icon {
+        width: 40px;
+        height: 40px;
+        background: linear-gradient(135deg, var(--accent), #ff6b81);
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 20px;
+      }
+
+      .logo-text {
+        font-size: 20px;
+        font-weight: 700;
+      }
+
+      .logo-text span {
+        color: var(--accent);
+      }
+
+      .status-badge {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 16px;
+        background: rgba(0, 210, 106, 0.1);
+        border: 1px solid rgba(0, 210, 106, 0.3);
+        border-radius: 20px;
+        font-size: 13px;
+      }
+
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        background: var(--success);
+        border-radius: 50%;
+        animation: pulse 2s infinite;
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.5;
+        }
+      }
+
+      /* Tabs */
+      .tabs {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 24px;
+      }
+
+      .tab {
+        padding: 10px 20px;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text-secondary);
+        cursor: pointer;
+        transition: all 0.2s;
+        font-size: 14px;
+        font-weight: 500;
+      }
+
+      .tab:hover {
+        border-color: var(--accent);
+      }
+
+      .tab.active {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: white;
+      }
+
+      .tab-content {
+        display: none;
+      }
+
+      .tab-content.active {
+        display: block;
+      }
+
+      /* Stats Grid */
+      .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 16px;
+        margin-bottom: 32px;
+      }
+
+      .stat-card {
+        background: var(--bg-card);
+        border-radius: 16px;
+        padding: 24px;
+        border: 1px solid var(--border);
+        transition: transform 0.2s, box-shadow 0.2s;
+      }
+
+      .stat-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 32px rgba(233, 69, 96, 0.15);
+      }
+
+      .stat-label {
+        font-size: 12px;
+        color: var(--text-secondary);
+        margin-bottom: 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .stat-value {
+        font-size: 28px;
+        font-weight: 700;
+      }
+
+      .stat-value.accent {
+        color: var(--accent);
+      }
+      .stat-value.success {
+        color: var(--success);
+      }
+      .stat-value.warning {
+        color: var(--warning);
+      }
+
+      .stat-sub {
+        font-size: 12px;
+        color: var(--text-secondary);
+        margin-top: 4px;
+      }
+
+      /* Section */
+      .section {
+        background: var(--bg-secondary);
+        border-radius: 20px;
+        padding: 24px;
+        margin-bottom: 24px;
+        border: 1px solid var(--border);
+      }
+
+      .section-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+      }
+
+      .section-title {
+        font-size: 18px;
+        font-weight: 600;
+      }
+
+      /* Chart */
+      .chart-container {
+        height: 200px;
+        display: flex;
+        align-items: flex-end;
+        gap: 8px;
+        padding: 16px 0;
+      }
+
+      .chart-bar {
+        flex: 1;
+        background: linear-gradient(to top, var(--accent), var(--accent-hover));
+        border-radius: 4px 4px 0 0;
+        min-height: 10px;
+        position: relative;
+        transition: all 0.3s;
+      }
+
+      .chart-bar:hover {
+        opacity: 0.8;
+      }
+
+      .chart-bar .tooltip {
+        position: absolute;
+        bottom: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.8);
+        padding: 6px 10px;
+        border-radius: 6px;
+        font-size: 11px;
+        white-space: nowrap;
+        opacity: 0;
+        transition: opacity 0.2s;
+        pointer-events: none;
+      }
+
+      .chart-bar:hover .tooltip {
+        opacity: 1;
+      }
+
+      .chart-labels {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+      }
+
+      .chart-label {
+        flex: 1;
+        text-align: center;
+        font-size: 10px;
+        color: var(--text-secondary);
+      }
+
+      /* Endpoint Table */
+      .endpoint-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      .endpoint-table th,
+      .endpoint-table td {
+        padding: 12px 16px;
+        text-align: left;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .endpoint-table th {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--text-secondary);
+        font-weight: 600;
+      }
+
+      .endpoint-table td {
+        font-size: 13px;
+      }
+
+      .endpoint-path {
+        font-family: "Monaco", "Consolas", monospace;
+        color: var(--accent);
+      }
+
+      .progress-bar {
+        width: 100px;
+        height: 6px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 3px;
+        overflow: hidden;
+      }
+
+      .progress-fill {
+        height: 100%;
+        background: var(--success);
+        border-radius: 3px;
+      }
+
+      /* API Endpoint Grid */
+      .api-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+        gap: 16px;
+      }
+
+      .api-card {
+        background: var(--bg-card);
+        border-radius: 12px;
+        padding: 20px;
+        border: 1px solid var(--border);
+        transition: all 0.2s;
+      }
+
+      .api-card:hover {
+        border-color: var(--accent);
+      }
+
+      .api-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+
+      .api-name {
+        font-weight: 600;
+        font-size: 15px;
+      }
+
+      .api-method {
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-size: 11px;
+        font-weight: 600;
+        background: rgba(0, 210, 106, 0.2);
+        color: var(--success);
+      }
+
+      .api-path {
+        font-family: "Monaco", "Consolas", monospace;
+        font-size: 13px;
+        color: var(--text-secondary);
+        background: rgba(0, 0, 0, 0.3);
+        padding: 8px 12px;
+        border-radius: 8px;
+        margin-bottom: 16px;
+      }
+
+      .api-actions {
+        display: flex;
+        gap: 8px;
+      }
+
+      .btn {
+        padding: 10px 16px;
+        border: none;
+        border-radius: 8px;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .btn-primary {
+        background: var(--accent);
+        color: white;
+      }
+
+      .btn-primary:hover {
+        background: var(--accent-hover);
+      }
+
+      .btn-secondary {
+        background: rgba(255, 255, 255, 0.1);
+        color: var(--text-primary);
+      }
+
+      .btn-secondary:hover {
+        background: rgba(255, 255, 255, 0.15);
+      }
+
+      .btn-danger {
+        background: rgba(255, 71, 87, 0.2);
+        color: var(--error);
+      }
+
+      .btn-danger:hover {
+        background: rgba(255, 71, 87, 0.3);
+      }
+
+      .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      /* Cache Section */
+      .cache-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      .cache-btn {
+        flex: 1;
+        min-width: 140px;
+        padding: 16px;
+        text-align: center;
+      }
+
+      /* Response Panel */
+      .response-panel {
+        margin-top: 24px;
+      }
+
+      .response-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+
+      .response-title {
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .response-meta {
+        font-size: 12px;
+        color: var(--text-secondary);
+      }
+
+      .response-box {
+        background: rgba(0, 0, 0, 0.4);
+        border-radius: 12px;
+        padding: 16px;
+        max-height: 400px;
+        overflow: auto;
+        font-family: "Monaco", "Consolas", monospace;
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .response-box pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+
+      /* Toast */
+      .toast {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        padding: 16px 24px;
+        border-radius: 12px;
+        font-size: 14px;
+        font-weight: 500;
+        display: none;
+        animation: slideIn 0.3s ease;
+        z-index: 1000;
+      }
+
+      .toast.success {
+        background: var(--success);
+        color: white;
+      }
+
+      .toast.error {
+        background: var(--error);
+        color: white;
+      }
+
+      .toast.show {
+        display: block;
+      }
+
+      @keyframes slideIn {
+        from {
+          transform: translateX(100%);
+          opacity: 0;
+        }
+        to {
+          transform: translateX(0);
+          opacity: 1;
+        }
+      }
+
+      /* Loading */
+      .loading {
+        display: inline-block;
+        width: 16px;
+        height: 16px;
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        border-radius: 50%;
+        border-top-color: white;
+        animation: spin 0.8s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      /* Responsive */
+      @media (max-width: 768px) {
+        .container {
+          padding: 16px;
+        }
+
+        .header {
+          flex-direction: column;
+          gap: 16px;
+        }
+
+        .stats-grid {
+          grid-template-columns: repeat(2, 1fr);
+        }
+
+        .api-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <!-- Header -->
+      <header class="header">
+        <div class="logo">
+          <div class="logo-icon">🎬</div>
+          <div class="logo-text">Kerkerker <span>Douban</span> Service</div>
+        </div>
+        <div class="status-badge">
+          <div class="status-dot"></div>
+          <span>服务运行中</span>
+        </div>
+      </header>
+
+      <!-- Tabs -->
+      <div class="tabs">
+        <div class="tab active" onclick="switchTab('analytics')">
+          📊 数据分析
+        </div>
+        <div class="tab" onclick="switchTab('api')">📡 API 端点</div>
+        <div class="tab" onclick="switchTab('cache')">🗄️ 缓存管理</div>
+      </div>
+
+      <!-- Analytics Tab -->
+      <div id="tab-analytics" class="tab-content active">
+        <!-- Stats -->
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-label">总 API 调用</div>
+            <div class="stat-value accent" id="total-calls">-</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">今日调用</div>
+            <div class="stat-value success" id="today-calls">-</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">平均响应时间</div>
+            <div class="stat-value warning" id="avg-latency">-</div>
+            <div class="stat-sub">毫秒</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">缓存命中率</div>
+            <div class="stat-value success" id="cache-rate">-</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">错误率</div>
+            <div class="stat-value" id="error-rate">-</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">运行时间</div>
+            <div class="stat-value" id="uptime">-</div>
+          </div>
+        </div>
+
+        <!-- Daily Trend Chart -->
+        <section class="section">
+          <div class="section-header">
+            <h2 class="section-title">📈 7日调用趋势</h2>
+          </div>
+          <div class="chart-container" id="trend-chart"></div>
+          <div class="chart-labels" id="trend-labels"></div>
+        </section>
+
+        <!-- Top Endpoints -->
+        <section class="section">
+          <div class="section-header">
+            <h2 class="section-title">🔥 热门端点</h2>
+            <button class="btn btn-danger" onclick="resetAnalytics()">
+              重置统计
+            </button>
+          </div>
+          <table class="endpoint-table">
+            <thead>
+              <tr>
+                <th>端点</th>
+                <th>调用次数</th>
+                <th>平均延迟</th>
+                <th>缓存命中</th>
+                <th>成功率</th>
+              </tr>
+            </thead>
+            <tbody id="endpoints-body">
+              <tr>
+                <td
+                  colspan="5"
+                  style="text-align: center; color: var(--text-secondary)"
+                >
+                  加载中...
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </div>
+
+      <!-- API Tab -->
+      <div id="tab-api" class="tab-content">
+        <section class="section">
+          <div class="section-header">
+            <h2 class="section-title">📡 API 端点</h2>
+          </div>
+          <div class="api-grid" id="api-list"></div>
+        </section>
+
+        <!-- Response Panel -->
+        <section class="section response-panel">
+          <div class="response-header">
+            <h3 class="response-title">📋 响应结果</h3>
+            <span class="response-meta" id="response-meta"></span>
+          </div>
+          <div class="response-box">
+            <pre id="response-content">点击 "测试" 按钮查看 API 响应...</pre>
+          </div>
+        </section>
+      </div>
+
+      <!-- Cache Tab -->
+      <div id="tab-cache" class="tab-content">
+        <section class="section">
+          <div class="section-header">
+            <h2 class="section-title">🗄️ 缓存管理</h2>
+            <button class="btn btn-danger" onclick="clearAllCache()">
+              清除所有缓存
+            </button>
+          </div>
+          <div class="cache-controls">
+            <button
+              class="btn btn-secondary cache-btn"
+              onclick="clearCache('hero')"
+            >
+              🎬 Hero Banner
+            </button>
+            <button
+              class="btn btn-secondary cache-btn"
+              onclick="clearCache('category')"
+            >
+              📑 分类分页
+            </button>
+            <button
+              class="btn btn-secondary cache-btn"
+              onclick="clearCache('detail')"
+            >
+              🎞️ 影片详情
+            </button>
+            <button
+              class="btn btn-secondary cache-btn"
+              onclick="clearCache('latest')"
+            >
+              🆕 最新内容
+            </button>
+            <button
+              class="btn btn-secondary cache-btn"
+              onclick="clearCache('movies')"
+            >
+              🎥 电影分类
+            </button>
+            <button
+              class="btn btn-secondary cache-btn"
+              onclick="clearCache('tv')"
+            >
+              📺 电视剧分类
+            </button>
+            <button
+              class="btn btn-secondary cache-btn"
+              onclick="clearCache('new')"
+            >
+              ✨ 新上线
+            </button>
+            <button
+              class="btn btn-secondary cache-btn"
+              onclick="clearCache('search')"
+            >
+              🔍 搜索
+            </button>
+          </div>
+        </section>
+
+        <!-- Service Status -->
+        <section class="section">
+          <div class="section-header">
+            <h2 class="section-title">⚙️ 服务状态</h2>
+          </div>
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-label">代理状态</div>
+              <div class="stat-value" id="proxy-status">检测中...</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">TMDB</div>
+              <div class="stat-value" id="tmdb-status">检测中...</div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+      const API_BASE = window.location.origin;
+
+      const APIs = [
+        {
+          name: "Hero Banner",
+          path: "/api/v1/hero",
+          method: "GET",
+          desc: "首页轮播数据",
+        },
+        {
+          name: "分类分页",
+          path: "/api/v1/category?category=hot_movies&page=1",
+          method: "GET",
+          desc: "分类分页数据",
+        },
+        {
+          name: "影片详情",
+          path: "/api/v1/detail/1291546",
+          method: "GET",
+          desc: "获取影片详情",
+        },
+        {
+          name: "最新内容",
+          path: "/api/v1/latest",
+          method: "GET",
+          desc: "最新上映内容",
+        },
+        {
+          name: "电影分类",
+          path: "/api/v1/movies",
+          method: "GET",
+          desc: "电影分类列表",
+        },
+        {
+          name: "电视剧分类",
+          path: "/api/v1/tv",
+          method: "GET",
+          desc: "电视剧分类列表",
+        },
+        {
+          name: "新上线",
+          path: "/api/v1/new",
+          method: "GET",
+          desc: "新上线内容",
+        },
+        {
+          name: "搜索",
+          path: "/api/v1/search?q=流浪地球",
+          method: "GET",
+          desc: "搜索影片",
+        },
+      ];
+
+      // Tab switching
+      function switchTab(tabName) {
+        document
+          .querySelectorAll(".tab")
+          .forEach((t) => t.classList.remove("active"));
+        document
+          .querySelectorAll(".tab-content")
+          .forEach((t) => t.classList.remove("active"));
+
+        event.target.classList.add("active");
+        document.getElementById("tab-" + tabName).classList.add("active");
+
+        if (tabName === "analytics") {
+          loadAnalytics();
+        }
+      }
+
+      // Load analytics
+      async function loadAnalytics() {
+        try {
+          const response = await fetch(`${API_BASE}/api/v1/analytics`);
+          const result = await response.json();
+          const data = result.data;
+
+          // Update stats
+          document.getElementById("total-calls").textContent = formatNumber(
+            data.total_api_calls
+          );
+          document.getElementById("today-calls").textContent = formatNumber(
+            data.today_api_calls
+          );
+          document.getElementById("avg-latency").textContent =
+            data.avg_latency_ms.toFixed(1);
+          document.getElementById("cache-rate").textContent =
+            data.cache_hit_rate.toFixed(1) + "%";
+          document.getElementById("error-rate").textContent =
+            data.error_rate.toFixed(2) + "%";
+          document.getElementById("error-rate").className =
+            "stat-value " + (data.error_rate < 1 ? "success" : "error");
+          document.getElementById("uptime").textContent = formatUptime(
+            data.uptime_seconds
+          );
+
+          // Render chart
+          renderTrendChart(data.daily_trend);
+
+          // Render top endpoints
+          renderEndpointsTable(data.top_endpoints);
+        } catch (error) {
+          console.error("Failed to load analytics:", error);
+        }
+      }
+
+      // Format number with commas
+      function formatNumber(num) {
+        return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+      }
+
+      // Format uptime
+      function formatUptime(seconds) {
+        if (!seconds) return "-";
+        const hours = Math.floor(seconds / 3600);
+        const mins = Math.floor((seconds % 3600) / 60);
+        if (hours > 24) {
+          const days = Math.floor(hours / 24);
+          return `${days}天`;
+        }
+        return `${hours}h ${mins}m`;
+      }
+
+      // Render trend chart
+      function renderTrendChart(trend) {
+        const container = document.getElementById("trend-chart");
+        const labels = document.getElementById("trend-labels");
+
+        if (!trend || trend.length === 0) {
+          container.innerHTML =
+            '<div style="color: var(--text-secondary); text-align: center; width: 100%;">暂无数据</div>';
+          return;
+        }
+
+        const maxCalls = Math.max(...trend.map((d) => d.total_calls)) || 1;
+
+        container.innerHTML = trend
+          .map((d) => {
+            const height = (d.total_calls / maxCalls) * 100 || 5;
+            return `
+                    <div class="chart-bar" style="height: ${height}%">
+                        <div class="tooltip">${
+                          d.total_calls
+                        } 次调用<br>平均 ${d.avg_latency.toFixed(1)}ms</div>
+                    </div>
+                `;
+          })
+          .join("");
+
+        labels.innerHTML = trend
+          .map((d) => {
+            const date = d.date.slice(5); // MM-DD
+            return `<div class="chart-label">${date}</div>`;
+          })
+          .join("");
+      }
+
+      // Render endpoints table
+      function renderEndpointsTable(endpoints) {
+        const tbody = document.getElementById("endpoints-body");
+
+        if (!endpoints || endpoints.length === 0) {
+          tbody.innerHTML =
+            '<tr><td colspan="5" style="text-align: center; color: var(--text-secondary);">暂无数据</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = endpoints
+          .map((e) => {
+            const successRate =
+              e.total_calls > 0 ? (e.success_calls / e.total_calls) * 100 : 0;
+            const cacheHitRate =
+              e.cache_hits + e.cache_misses > 0
+                ? (e.cache_hits / (e.cache_hits + e.cache_misses)) * 100
+                : 0;
+
+            return `
+                    <tr>
+                        <td class="endpoint-path">${e.path}</td>
+                        <td>${formatNumber(e.total_calls)}</td>
+                        <td>${e.avg_latency_ms.toFixed(1)}ms</td>
+                        <td>${cacheHitRate.toFixed(0)}%</td>
+                        <td>
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="width: ${successRate}%; background: ${
+              successRate > 95 ? "var(--success)" : "var(--warning)"
+            }"></div>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+          })
+          .join("");
+      }
+
+      // Reset analytics
+      async function resetAnalytics() {
+        if (!confirm("确定要重置所有统计数据吗？")) return;
+
+        try {
+          await fetch(`${API_BASE}/api/v1/analytics`, { method: "DELETE" });
+          showToast("统计数据已重置", "success");
+          loadAnalytics();
+        } catch (error) {
+          showToast("重置失败: " + error.message, "error");
+        }
+      }
+
+      // Render API cards
+      function renderAPIs() {
+        const container = document.getElementById("api-list");
+        container.innerHTML = APIs.map(
+          (api, index) => `
+                <div class="api-card">
+                    <div class="api-header">
+                        <span class="api-name">${api.name}</span>
+                        <span class="api-method">${api.method}</span>
+                    </div>
+                    <div class="api-path">${api.path}</div>
+                    <div class="api-actions">
+                        <button class="btn btn-primary" onclick="testAPI(${index})">
+                            测试
+                        </button>
+                        <button class="btn btn-secondary" onclick="copyPath(${index})">
+                            复制
+                        </button>
+                    </div>
+                </div>
+            `
+        ).join("");
+      }
+
+      // Test API
+      async function testAPI(index) {
+        const api = APIs[index];
+        const startTime = Date.now();
+
+        document.getElementById("response-content").innerHTML =
+          '<span class="loading"></span> 请求中...';
+        document.getElementById("response-meta").textContent = "";
+
+        try {
+          const response = await fetch(API_BASE + api.path);
+          const data = await response.json();
+          const duration = Date.now() - startTime;
+
+          document.getElementById("response-content").textContent =
+            JSON.stringify(data, null, 2);
+          document.getElementById("response-meta").textContent = `${
+            api.path
+          } • ${response.status} • ${duration}ms • ${data.source || "unknown"}`;
+
+          showToast(`${api.name} 请求成功`, "success");
+        } catch (error) {
+          document.getElementById("response-content").textContent =
+            "Error: " + error.message;
+          showToast("请求失败: " + error.message, "error");
+        }
+      }
+
+      // Copy path
+      function copyPath(index) {
+        const api = APIs[index];
+        navigator.clipboard.writeText(API_BASE + api.path);
+        showToast("已复制到剪贴板", "success");
+      }
+
+      // Clear cache
+      async function clearCache(type) {
+        try {
+          const response = await fetch(`${API_BASE}/api/v1/${type}`, {
+            method: "DELETE",
+          });
+          const data = await response.json();
+          showToast(data.message || "缓存已清除", "success");
+        } catch (error) {
+          showToast("清除失败: " + error.message, "error");
+        }
+      }
+
+      // Clear all cache
+      async function clearAllCache() {
+        const types = ["hero", "category", "detail", "latest", "movies", "tv", "new", "search"];
+        for (const type of types) {
+          await clearCache(type);
+        }
+        showToast("所有缓存已清除", "success");
+      }
+
+      // Check service status
+      async function checkStatus() {
+        try {
+          const response = await fetch(`${API_BASE}/api/v1/status`);
+          const data = await response.json();
+
+          document.getElementById("proxy-status").textContent =
+            data.proxy_enabled ? `${data.proxy_count} 个代理` : "未配置";
+          document.getElementById("proxy-status").className =
+            "stat-value " + (data.proxy_enabled ? "success" : "warning");
+
+          document.getElementById("tmdb-status").textContent = data.tmdb_enabled
+            ? "已配置"
+            : "未配置";
+          document.getElementById("tmdb-status").className =
+            "stat-value " + (data.tmdb_enabled ? "success" : "warning");
+        } catch (error) {
+          document.getElementById("proxy-status").textContent = "离线";
+          document.getElementById("proxy-status").className =
+            "stat-value error";
+        }
+      }
+
+      // Toast notification
+      function showToast(message, type) {
+        const toast = document.getElementById("toast");
+        toast.textContent = message;
+        toast.className = `toast ${type} show`;
+        setTimeout(() => {
+          toast.className = "toast";
+        }, 3000);
+      }
+
+      // Initialize
+      renderAPIs();
+      checkStatus();
+      loadAnalytics();
+      setInterval(checkStatus, 30000);
+      setInterval(loadAnalytics, 60000);
+    </script>
+  </body>
+</html>

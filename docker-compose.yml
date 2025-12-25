@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  douban-api:
+    build: .
+    container_name: kerkerker-douban-service
+    ports:
+      - "8081:8080"
+    environment:
+      - PORT=8080
+      - GIN_MODE=release
+      - MONGODB_URI=mongodb://mongo:27017
+      - MONGODB_DATABASE=douban_api
+      - REDIS_URL=redis://redis:6379
+      - DOUBAN_API_PROXY=${DOUBAN_API_PROXY:-}
+      - TMDB_API_KEY=${TMDB_API_KEY:-}
+      - TMDB_BASE_URL=${TMDB_BASE_URL:-https://api.themoviedb.org/3}
+      - TMDB_IMAGE_BASE=${TMDB_IMAGE_BASE:-https://image.tmdb.org/t/p/original}
+    depends_on:
+      - mongo
+      - redis
+    restart: unless-stopped
+    networks:
+      - douban-network
+
+  mongo:
+    image: mongo:7
+    container_name: kerkerker-mongo
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+    networks:
+      - douban-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: kerkerker-redis
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    networks:
+      - douban-network
+
+networks:
+  douban-network:
+    driver: bridge
+
+volumes:
+  mongo_data:
+  redis_data:
