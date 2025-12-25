@@ -1,231 +1,368 @@
-#!/bin/bash
+#!/bin/sh
 
-# =============================================================================
+# ============================================================
 # Kerkerker Douban Service 一键部署脚本
-# 
-# 用法: curl -fsSL https://raw.githubusercontent.com/你的用户名/kerkerker-douban-service/main/scripts/install.sh | bash
-# 或者: wget -qO- https://raw.githubusercontent.com/你的用户名/kerkerker-douban-service/main/scripts/install.sh | bash
-# =============================================================================
+# ============================================================
+# 支持系统: Ubuntu, Debian, CentOS, RHEL, Alpine, macOS, Arch Linux
+# 使用方法:
+#   curl -fsSL https://raw.githubusercontent.com/unilei/kerkerker-douban-service/master/scripts/install.sh | sh
+#   或
+#   wget -qO- https://raw.githubusercontent.com/unilei/kerkerker-douban-service/master/scripts/install.sh | sh
+# ============================================================
 
 set -e
 
-# 颜色定义
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-MAGENTA='\033[0;35m'
-NC='\033[0m' # No Color
-BOLD='\033[1m'
-
-# 配置
-DOCKER_IMAGE="${DOCKER_IMAGE:-leizhe/kerkerker-douban-service}"
-INSTALL_DIR="${INSTALL_DIR:-/opt/kerkerker-douban-service}"
-SERVICE_PORT="${SERVICE_PORT:-8081}"
-
-# 打印带颜色的消息
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-log_success() {
-    echo -e "${GREEN}[✓]${NC} $1"
-}
-
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[✗]${NC} $1"
-}
-
-log_step() {
-    echo -e "\n${CYAN}${BOLD}▶ $1${NC}"
-}
-
-# 显示 Banner
-show_banner() {
-    echo -e "${MAGENTA}"
-    cat << 'EOF'
-╔═══════════════════════════════════════════════════════════════╗
-║                                                               ║
-║   🎬 Kerkerker Douban Service 一键部署                        ║
-║                                                               ║
-║   豆瓣 API 代理服务 - 支持电影、电视剧数据获取                   ║
-║                                                               ║
-╚═══════════════════════════════════════════════════════════════╝
-EOF
-    echo -e "${NC}"
-}
-
-# 检查是否为 root 用户
-check_root() {
-    if [ "$EUID" -ne 0 ]; then
-        log_warn "建议使用 root 用户运行此脚本"
-        log_info "尝试使用 sudo 继续..."
-        SUDO="sudo"
-    else
-        SUDO=""
-    fi
-}
-
-# 检查系统
-check_system() {
-    log_step "检查系统环境"
+# ==================== 系统检测 ====================
+detect_os() {
+    OS=""
+    ARCH=""
+    PKG_MANAGER=""
     
-    # 检查操作系统
+    # 检测架构
+    case "$(uname -m)" in
+        x86_64|amd64) ARCH="amd64" ;;
+        aarch64|arm64) ARCH="arm64" ;;
+        armv7l) ARCH="armv7" ;;
+        *) ARCH="unknown" ;;
+    esac
+    
+    # 检测操作系统
     if [ -f /etc/os-release ]; then
         . /etc/os-release
-        OS=$NAME
-        log_info "操作系统: $OS"
+        OS="$ID"
+        OS_VERSION="$VERSION_ID"
+        OS_NAME="$NAME"
+    elif [ -f /etc/redhat-release ]; then
+        OS="rhel"
+        OS_NAME="Red Hat"
+    elif [ "$(uname)" = "Darwin" ]; then
+        OS="macos"
+        OS_NAME="macOS"
     else
-        log_warn "无法识别操作系统"
+        OS="unknown"
+        OS_NAME="Unknown"
     fi
     
-    # 检查架构
-    ARCH=$(uname -m)
-    log_info "系统架构: $ARCH"
-    
-    log_success "系统检查完成"
+    # 检测包管理器
+    case "$OS" in
+        ubuntu|debian|linuxmint|pop) PKG_MANAGER="apt" ;;
+        centos|rhel|fedora|rocky|almalinux) PKG_MANAGER="yum" ;;
+        alpine) PKG_MANAGER="apk" ;;
+        arch|manjaro) PKG_MANAGER="pacman" ;;
+        macos) PKG_MANAGER="brew" ;;
+        *) PKG_MANAGER="unknown" ;;
+    esac
 }
 
-# 检查并安装 Docker
-check_docker() {
-    log_step "检查 Docker"
+# 初始化系统检测
+detect_os
+
+# ==================== 颜色定义 ====================
+# 检测终端是否支持颜色
+if [ -t 1 ] && command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null || echo 0)" -ge 8 ]; then
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[1;33m'
+    BLUE='\033[0;34m'
+    CYAN='\033[0;36m'
+    MAGENTA='\033[0;35m'
+    BOLD='\033[1m'
+    NC='\033[0m'
+else
+    RED=''
+    GREEN=''
+    YELLOW=''
+    BLUE=''
+    CYAN=''
+    MAGENTA=''
+    BOLD=''
+    NC=''
+fi
+
+# ==================== 配置 ====================
+DOCKER_IMAGE="${DOCKER_IMAGE:-unilei/kerkerker-douban-service}"
+DEFAULT_PORT="8081"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/kerkerker-douban-service}"
+
+# ==================== 工具函数 ====================
+# POSIX 兼容的 printf 输出
+print_color() {
+    printf '%b' "$1"
+}
+
+print_banner() {
+    print_color "${MAGENTA}"
+    echo "╔═══════════════════════════════════════════════════════════╗"
+    echo "║                                                           ║"
+    print_color "║   ${BOLD}🎬 Kerkerker Douban Service 一键部署${NC}${MAGENTA}                   ║\n"
+    echo "║                                                           ║"
+    echo "║   豆瓣 API 代理服务 - 支持电影、电视剧数据获取            ║"
+    echo "║                                                           ║"
+    echo "╚═══════════════════════════════════════════════════════════╝"
+    print_color "${NC}\n"
+    # 显示系统信息
+    print_color "${CYAN}   系统: ${OS_NAME} (${ARCH})${NC}\n"
+    echo ""
+}
+
+print_step() {
+    printf '\n%b==>%b %b%s%b\n' "${BLUE}" "${NC}" "${BOLD}" "$1" "${NC}"
+}
+
+print_info() {
+    printf '%bℹ%b  %s\n' "${BLUE}" "${NC}" "$1"
+}
+
+print_success() {
+    printf '%b✔%b  %s\n' "${GREEN}" "${NC}" "$1"
+}
+
+print_warning() {
+    printf '%b⚠%b  %s\n' "${YELLOW}" "${NC}" "$1"
+}
+
+print_error() {
+    printf '%b✖%b  %s\n' "${RED}" "${NC}" "$1"
+}
+
+# 读取用户输入（支持默认值和密码模式）
+# 注意：从 /dev/tty 读取，以支持 curl | sh 方式运行
+read_input() {
+    _prompt="$1"
+    _default="$2"
+    _is_password="$3"
+    _value=""
     
-    if command -v docker &> /dev/null; then
-        DOCKER_VERSION=$(docker --version | cut -d ' ' -f3 | tr -d ',')
-        log_success "Docker 已安装 (版本: $DOCKER_VERSION)"
+    if [ -n "$_default" ]; then
+        _prompt="${_prompt} [${_default}]"
+    fi
+    
+    # 输出提示到 /dev/tty（确保在终端显示，即使通过管道运行）
+    if [ -e /dev/tty ]; then
+        if [ "$_is_password" = "true" ]; then
+            printf '%b?%b %s: ' "${CYAN}" "${NC}" "$_prompt" > /dev/tty
+            stty -echo 2>/dev/null || true
+            read _value < /dev/tty
+            stty echo 2>/dev/null || true
+            echo "" > /dev/tty
+        else
+            printf '%b?%b %s: ' "${CYAN}" "${NC}" "$_prompt" > /dev/tty
+            read _value < /dev/tty
+        fi
     else
-        log_warn "Docker 未安装，正在安装..."
-        install_docker
+        # 回退：无 /dev/tty 时使用标准输入输出
+        printf '%b?%b %s: ' "${CYAN}" "${NC}" "$_prompt" >&2
+        if [ "$_is_password" = "true" ]; then
+            stty -echo 2>/dev/null || true
+            read _value
+            stty echo 2>/dev/null || true
+            echo "" >&2
+        else
+            read _value
+        fi
+    fi
+    
+    if [ -z "$_value" ] && [ -n "$_default" ]; then
+        echo "$_default"
+    else
+        echo "$_value"
+    fi
+}
+
+# 验证端口号 (POSIX 兼容)
+validate_port() {
+    _port="$1"
+    case "$_port" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    [ "$_port" -ge 1 ] && [ "$_port" -le 65535 ]
+}
+
+# 检查命令是否存在
+command_exists() {
+    command -v "$1" > /dev/null 2>&1
+}
+
+# ==================== Docker 安装辅助 ====================
+install_docker_hint() {
+    echo ""
+    print_info "根据您的系统，可以使用以下命令安装 Docker:"
+    echo ""
+    case "$PKG_MANAGER" in
+        apt)
+            echo "   # Ubuntu/Debian"
+            echo "   curl -fsSL https://get.docker.com | sh"
+            echo "   sudo usermod -aG docker \$USER"
+            ;;
+        yum)
+            echo "   # CentOS/RHEL"
+            echo "   curl -fsSL https://get.docker.com | sh"
+            echo "   sudo systemctl enable --now docker"
+            echo "   sudo usermod -aG docker \$USER"
+            ;;
+        apk)
+            echo "   # Alpine"
+            echo "   apk add docker docker-compose"
+            echo "   rc-update add docker boot"
+            echo "   service docker start"
+            ;;
+        pacman)
+            echo "   # Arch Linux"
+            echo "   pacman -S docker docker-compose"
+            echo "   systemctl enable --now docker"
+            echo "   usermod -aG docker \$USER"
+            ;;
+        brew)
+            echo "   # macOS"
+            echo "   brew install --cask docker"
+            echo "   # 然后启动 Docker Desktop"
+            ;;
+        *)
+            echo "   请访问: https://docs.docker.com/get-docker/"
+            ;;
+    esac
+    echo ""
+    print_info "安装完成后，请重新登录或执行 'newgrp docker'，然后重新运行此脚本"
+}
+
+# ==================== 检查依赖 ====================
+check_dependencies() {
+    print_step "检查系统依赖"
+    
+    _has_docker=0
+    _has_compose=0
+    
+    # 检查 Docker
+    if command_exists docker; then
+        print_success "Docker 已安装"
+        _has_docker=1
+    else
+        print_error "Docker 未安装"
+    fi
+    
+    # 检查 Docker Compose
+    if command_exists docker-compose; then
+        print_success "Docker Compose 已安装 (standalone)"
+        COMPOSE_CMD="docker-compose"
+        _has_compose=1
+    elif docker compose version > /dev/null 2>&1; then
+        print_success "Docker Compose 已安装 (plugin)"
+        COMPOSE_CMD="docker compose"
+        _has_compose=1
+    else
+        print_error "Docker Compose 未安装"
+    fi
+    
+    # 检查 curl
+    if ! command_exists curl; then
+        print_warning "curl 未安装（健康检查将跳过）"
+    else
+        print_success "curl 已安装"
+    fi
+    
+    # 如果有缺失的依赖
+    if [ "$_has_docker" = "0" ] || [ "$_has_compose" = "0" ]; then
+        install_docker_hint
+        exit 1
     fi
     
     # 检查 Docker 是否运行
-    if ! docker info &> /dev/null; then
-        log_warn "Docker 未运行，正在启动..."
-        $SUDO systemctl start docker
-        $SUDO systemctl enable docker
+    if ! docker info > /dev/null 2>&1; then
+        print_error "Docker 未运行"
+        echo ""
+        case "$OS" in
+            macos)
+                print_info "请启动 Docker Desktop 应用"
+                ;;
+            alpine)
+                print_info "请执行: service docker start"
+                ;;
+            *)
+                print_info "请执行: sudo systemctl start docker"
+                ;;
+        esac
+        exit 1
     fi
-    
-    log_success "Docker 运行正常"
+    print_success "Docker 运行正常"
 }
 
-# 安装 Docker
-install_docker() {
-    log_info "正在安装 Docker..."
-    
-    # 使用官方脚本安装
-    curl -fsSL https://get.docker.com | $SUDO sh
-    
-    # 将当前用户添加到 docker 组
-    if [ -n "$SUDO_USER" ]; then
-        $SUDO usermod -aG docker $SUDO_USER
-    elif [ -n "$USER" ] && [ "$USER" != "root" ]; then
-        $SUDO usermod -aG docker $USER
-    fi
-    
-    # 启动 Docker
-    $SUDO systemctl start docker
-    $SUDO systemctl enable docker
-    
-    log_success "Docker 安装完成"
-}
-
-# 检查并安装 Docker Compose
-check_docker_compose() {
-    log_step "检查 Docker Compose"
-    
-    if docker compose version &> /dev/null; then
-        COMPOSE_VERSION=$(docker compose version --short)
-        log_success "Docker Compose 已安装 (版本: $COMPOSE_VERSION)"
-    elif command -v docker-compose &> /dev/null; then
-        COMPOSE_VERSION=$(docker-compose --version | cut -d ' ' -f4 | tr -d ',')
-        log_success "Docker Compose 已安装 (版本: $COMPOSE_VERSION)"
-        DOCKER_COMPOSE="docker-compose"
-    else
-        log_warn "Docker Compose 未安装，正在安装..."
-        install_docker_compose
-    fi
-    
-    # 默认使用新版命令
-    DOCKER_COMPOSE="${DOCKER_COMPOSE:-docker compose}"
-}
-
-# 安装 Docker Compose
-install_docker_compose() {
-    log_info "正在安装 Docker Compose..."
-    
-    # Docker Compose V2 通常随 Docker 一起安装
-    # 如果没有，尝试安装插件
-    $SUDO mkdir -p /usr/local/lib/docker/cli-plugins
-    $SUDO curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m) -o /usr/local/lib/docker/cli-plugins/docker-compose
-    $SUDO chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-    
-    log_success "Docker Compose 安装完成"
-}
-
-# 创建安装目录
-create_install_dir() {
-    log_step "创建安装目录"
-    
-    if [ -d "$INSTALL_DIR" ]; then
-        log_warn "安装目录已存在: $INSTALL_DIR"
-        read -p "是否覆盖? [y/N] " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            log_info "使用现有目录"
-        fi
-    else
-        $SUDO mkdir -p "$INSTALL_DIR"
-        log_success "创建目录: $INSTALL_DIR"
-    fi
-    
-    cd "$INSTALL_DIR"
-}
-
-# 配置环境变量
-configure_env() {
-    log_step "配置环境变量"
-    
-    # 检查是否已有配置
-    if [ -f "$INSTALL_DIR/.env" ]; then
-        log_warn "已存在配置文件"
-        read -p "是否重新配置? [y/N] " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            log_info "使用现有配置"
-            return
-        fi
-    fi
-    
+# ==================== 交互式配置 ====================
+interactive_config() {
+    print_step "配置部署参数"
     echo ""
-    echo -e "${CYAN}${BOLD}请配置以下选项 (直接回车使用默认值):${NC}"
+    print_info "请根据提示输入配置信息（直接回车使用默认值）"
     echo ""
+    
+    # 安装目录
+    INSTALL_DIR=$(read_input "安装目录" "$INSTALL_DIR")
     
     # 服务端口
-    read -p "服务端口 [${SERVICE_PORT}]: " input_port
-    SERVICE_PORT="${input_port:-$SERVICE_PORT}"
+    while true; do
+        SERVICE_PORT=$(read_input "服务端口" "$DEFAULT_PORT")
+        if validate_port "$SERVICE_PORT"; then
+            break
+        fi
+        print_error "无效的端口号，请输入 1-65535 之间的数字"
+    done
+    
+    echo ""
+    print_info "以下为可选配置（直接回车跳过，部署后可在 .env 中修改）"
+    echo ""
     
     # 豆瓣代理
-    echo ""
-    log_info "豆瓣代理用于绕过 IP 限制，多个代理用逗号分隔"
-    log_info "格式: http://ip:port 或 http://user:pass@ip:port"
-    read -p "豆瓣代理 (可选): " DOUBAN_PROXY
+    print_info "豆瓣代理用于绕过 IP 限制，多个代理用逗号分隔"
+    print_info "格式: http://ip:port 或 http://user:pass@ip:port"
+    DOUBAN_PROXY=$(read_input "豆瓣代理 (可选)" "")
     
     # TMDB API
     echo ""
-    log_info "TMDB API 用于获取横向海报，提升 Hero Banner 效果"
-    log_info "获取地址: https://www.themoviedb.org/settings/api"
-    log_info "多个 API Key 用逗号分隔，将启用轮询负载均衡"
-    read -p "TMDB API Key (可选): " TMDB_KEY
+    print_info "TMDB API 用于获取横向海报，提升 Hero Banner 效果"
+    print_info "获取地址: https://www.themoviedb.org/settings/api"
+    print_info "多个 API Key 用逗号分隔，将启用轮询负载均衡"
+    TMDB_KEY=$(read_input "TMDB API Key (可选)" "")
     
-    # 写入配置文件
-    cat > "$INSTALL_DIR/.env" << EOF
-# Kerkerker Douban Service 配置文件
+    # 确认配置
+    echo ""
+    print_step "配置确认"
+    echo ""
+    printf "   %b安装目录:%b       %s\n" "${BOLD}" "${NC}" "$INSTALL_DIR"
+    printf "   %b服务端口:%b       %s\n" "${BOLD}" "${NC}" "$SERVICE_PORT"
+    printf "   %b镜像:%b           %s:latest\n" "${BOLD}" "${NC}" "$DOCKER_IMAGE"
+    if [ -n "$DOUBAN_PROXY" ]; then
+        printf "   %b豆瓣代理:%b       已设置\n" "${BOLD}" "${NC}"
+    fi
+    if [ -n "$TMDB_KEY" ]; then
+        printf "   %bTMDB API:%b       已设置\n" "${BOLD}" "${NC}"
+    fi
+    echo ""
+    
+    _confirm=$(read_input "确认以上配置并开始部署? (y/n)" "y")
+    case "$_confirm" in
+        [Yy]|[Yy][Ee][Ss]) ;;
+        *)
+            print_warning "已取消部署"
+            exit 0
+            ;;
+    esac
+}
+
+# ==================== 创建配置文件 ====================
+create_config_files() {
+    print_step "创建配置文件"
+    
+    # 创建安装目录
+    mkdir -p "$INSTALL_DIR"
+    cd "$INSTALL_DIR"
+    print_success "创建目录: $INSTALL_DIR"
+    
+    # 创建 .env 文件
+    cat > .env << EOF
+# ============================================================
+# Kerkerker Douban Service 环境配置
 # 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
+# ============================================================
+# 修改配置后请执行: ./manage.sh restart
+# ============================================================
 
 # 服务端口
 SERVICE_PORT=${SERVICE_PORT}
@@ -238,15 +375,13 @@ TMDB_API_KEY=${TMDB_KEY}
 TMDB_BASE_URL=https://api.themoviedb.org/3
 TMDB_IMAGE_BASE=https://image.tmdb.org/t/p/original
 EOF
-
-    log_success "配置文件已保存"
-}
-
-# 创建 docker-compose.yml
-create_docker_compose() {
-    log_step "创建 Docker Compose 配置"
+    print_success "创建 .env 配置文件"
     
-    cat > "$INSTALL_DIR/docker-compose.yml" << EOF
+    # 创建 docker-compose.yml
+    cat > docker-compose.yml << EOF
+# Kerkerker Douban Service Docker Compose 配置
+# 自动生成，请勿手动修改结构
+
 services:
   douban-api:
     image: ${DOCKER_IMAGE}:latest
@@ -297,98 +432,78 @@ volumes:
   mongo_data:
   redis_data:
 EOF
+    print_success "创建 docker-compose.yml"
+    
+    # 创建管理脚本 (POSIX 兼容)
+    cat > manage.sh << 'SCRIPT'
+#!/bin/sh
 
-    log_success "Docker Compose 配置已创建"
-}
+# Kerkerker Douban Service 管理脚本
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
 
-# 拉取镜像
-pull_images() {
-    log_step "拉取 Docker 镜像"
-    
-    log_info "拉取 ${DOCKER_IMAGE}:latest ..."
-    $SUDO docker pull ${DOCKER_IMAGE}:latest
-    
-    log_info "拉取 mongo:7 ..."
-    $SUDO docker pull mongo:7
-    
-    log_info "拉取 redis:7-alpine ..."
-    $SUDO docker pull redis:7-alpine
-    
-    log_success "镜像拉取完成"
-}
-
-# 启动服务
-start_services() {
-    log_step "启动服务"
-    
-    cd "$INSTALL_DIR"
-    $SUDO $DOCKER_COMPOSE up -d
-    
-    # 等待服务启动
-    log_info "等待服务启动..."
-    sleep 5
-    
-    # 检查服务状态
-    if $SUDO docker ps | grep -q "kerkerker-douban-service"; then
-        log_success "服务启动成功"
-    else
-        log_error "服务启动失败，请检查日志"
-        $SUDO $DOCKER_COMPOSE logs
-        exit 1
-    fi
-}
-
-# 创建管理脚本
-create_manage_script() {
-    log_step "创建管理脚本"
-    
-    cat > "$INSTALL_DIR/manage.sh" << 'SCRIPT'
-#!/bin/bash
-
-INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$INSTALL_DIR"
+# 检测 compose 命令
+if docker compose version > /dev/null 2>&1; then
+    COMPOSE_CMD="docker compose"
+elif command -v docker-compose > /dev/null 2>&1; then
+    COMPOSE_CMD="docker-compose"
+else
+    echo "错误: Docker Compose 未安装"
+    exit 1
+fi
 
 case "$1" in
     start)
-        echo "启动服务..."
-        docker compose up -d
+        echo "🚀 启动服务..."
+        $COMPOSE_CMD up -d
+        echo "✅ 服务已启动"
         ;;
     stop)
-        echo "停止服务..."
-        docker compose down
+        echo "🛑 停止服务..."
+        $COMPOSE_CMD down
+        echo "✅ 服务已停止"
         ;;
     restart)
-        echo "重启服务..."
-        docker compose restart
+        echo "🔄 重启服务..."
+        $COMPOSE_CMD restart
+        echo "✅ 重启完成"
         ;;
     logs)
-        docker compose logs -f ${2:-douban-api}
+        $COMPOSE_CMD logs -f ${2:-douban-api}
         ;;
     status)
-        docker compose ps
+        $COMPOSE_CMD ps
         ;;
     update)
-        echo "更新服务..."
-        docker compose pull
-        docker compose up -d
-        echo "更新完成"
+        echo "📥 更新镜像..."
+        $COMPOSE_CMD pull
+        echo "🔄 重启服务..."
+        $COMPOSE_CMD up -d
+        echo "🧹 清理旧镜像..."
+        docker image prune -f
+        echo "✅ 更新完成"
         ;;
     config)
-        ${EDITOR:-nano} .env
+        ${EDITOR:-vi} .env
         echo "配置已修改，请运行 '$0 restart' 使配置生效"
         ;;
     uninstall)
-        read -p "确定要卸载吗? 这将删除所有数据! [y/N] " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            docker compose down -v
-            echo "服务已卸载"
-        fi
+        printf "确定要卸载吗? 这将删除所有数据! [y/N] "
+        read _reply
+        case "$_reply" in
+            [Yy]|[Yy][Ee][Ss])
+                $COMPOSE_CMD down -v
+                echo "✅ 服务已卸载"
+                ;;
+            *)
+                echo "已取消"
+                ;;
+        esac
         ;;
     *)
         echo "Kerkerker Douban Service 管理脚本"
         echo ""
-        echo "用法: $0 {start|stop|restart|logs|status|update|config|uninstall}"
+        echo "用法: $0 <命令>"
         echo ""
         echo "命令:"
         echo "  start     启动服务"
@@ -402,85 +517,156 @@ case "$1" in
         ;;
 esac
 SCRIPT
+    chmod +x manage.sh
+    print_success "创建管理脚本 manage.sh"
+}
 
-    chmod +x "$INSTALL_DIR/manage.sh"
+# ==================== 部署服务 ====================
+deploy_services() {
+    print_step "部署服务"
     
-    # 创建软链接到 /usr/local/bin
-    if [ -d "/usr/local/bin" ]; then
-        $SUDO ln -sf "$INSTALL_DIR/manage.sh" /usr/local/bin/douban-service
-        log_success "已创建命令别名: douban-service"
+    cd "$INSTALL_DIR"
+    
+    # 拉取镜像
+    print_info "拉取 Docker 镜像..."
+    if $COMPOSE_CMD pull; then
+        print_success "镜像拉取完成"
+    else
+        print_error "镜像拉取失败"
+        exit 1
     fi
     
-    log_success "管理脚本已创建"
+    # 启动服务
+    print_info "启动服务..."
+    if $COMPOSE_CMD up -d; then
+        print_success "服务启动成功"
+    else
+        print_error "服务启动失败"
+        exit 1
+    fi
+    
+    # 等待服务就绪
+    print_info "等待服务就绪..."
+    sleep 10
+    
+    # 健康检查
+    if command_exists curl; then
+        print_info "执行健康检查..."
+        _retries=10
+        _success=0
+        _i=1
+        
+        while [ "$_i" -le "$_retries" ]; do
+            if curl -sf "http://localhost:${SERVICE_PORT}/health" > /dev/null 2>&1; then
+                _success=1
+                break
+            fi
+            printf "."
+            sleep 3
+            _i=$((_i + 1))
+        done
+        echo ""
+        
+        if [ "$_success" = "1" ]; then
+            print_success "健康检查通过"
+        else
+            print_warning "健康检查超时，服务可能仍在启动中"
+        fi
+    fi
 }
 
-# 显示完成信息
-show_complete() {
+# ==================== 创建全局命令 ====================
+create_global_command() {
+    print_step "创建全局命令"
+    
+    # 尝试创建软链接到 /usr/local/bin
+    if [ -d "/usr/local/bin" ] && [ -w "/usr/local/bin" ]; then
+        ln -sf "$INSTALL_DIR/manage.sh" /usr/local/bin/douban-service
+        print_success "已创建命令别名: douban-service"
+    elif [ -d "/usr/local/bin" ]; then
+        # 需要 sudo
+        if command_exists sudo; then
+            sudo ln -sf "$INSTALL_DIR/manage.sh" /usr/local/bin/douban-service
+            print_success "已创建命令别名: douban-service"
+        else
+            print_warning "无法创建全局命令，请手动执行: ln -s $INSTALL_DIR/manage.sh /usr/local/bin/douban-service"
+        fi
+    else
+        print_warning "无法创建全局命令，请使用 $INSTALL_DIR/manage.sh"
+    fi
+}
+
+# ==================== 显示完成信息 ====================
+show_completion() {
     # 获取服务器 IP
-    SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null || echo "your-server-ip")
+    SERVER_IP=""
+    if command_exists curl; then
+        SERVER_IP=$(curl -sf --connect-timeout 5 ifconfig.me 2>/dev/null || curl -sf --connect-timeout 5 icanhazip.com 2>/dev/null || echo "")
+    fi
+    if [ -z "$SERVER_IP" ]; then
+        SERVER_IP="your-server-ip"
+    fi
     
     echo ""
-    echo -e "${GREEN}${BOLD}"
-    cat << EOF
-╔═══════════════════════════════════════════════════════════════╗
-║                                                               ║
-║   🎉 安装完成!                                                 ║
-║                                                               ║
-╚═══════════════════════════════════════════════════════════════╝
-EOF
-    echo -e "${NC}"
-    
-    echo -e "${CYAN}${BOLD}服务信息:${NC}"
-    echo ""
-    echo -e "  📍 管理面板:  ${GREEN}http://${SERVER_IP}:${SERVICE_PORT}${NC}"
-    echo -e "  📍 API 地址:  ${GREEN}http://${SERVER_IP}:${SERVICE_PORT}/api/v1${NC}"
-    echo -e "  📁 安装目录:  ${INSTALL_DIR}"
+    print_color "${GREEN}╔═══════════════════════════════════════════════════════════╗${NC}\n"
+    print_color "${GREEN}║                                                           ║${NC}\n"
+    print_color "${GREEN}║   ${BOLD}✅ 部署完成!${NC}${GREEN}                                          ║${NC}\n"
+    print_color "${GREEN}║                                                           ║${NC}\n"
+    print_color "${GREEN}╚═══════════════════════════════════════════════════════════╝${NC}\n"
     echo ""
     
-    echo -e "${CYAN}${BOLD}管理命令:${NC}"
+    printf "%b📍 安装目录:%b %s\n" "${BOLD}" "${NC}" "$INSTALL_DIR"
     echo ""
-    echo "  douban-service start     # 启动服务"
-    echo "  douban-service stop      # 停止服务"
-    echo "  douban-service restart   # 重启服务"
-    echo "  douban-service logs      # 查看日志"
-    echo "  douban-service status    # 查看状态"
-    echo "  douban-service update    # 更新服务"
-    echo "  douban-service config    # 编辑配置"
+    printf "%b🌐 访问地址:%b\n" "${BOLD}" "${NC}"
+    echo "   管理面板:   http://localhost:${SERVICE_PORT}"
+    echo "   API 地址:   http://localhost:${SERVICE_PORT}/api/v1"
+    if [ "$SERVER_IP" != "your-server-ip" ]; then
+        echo "   外网访问:   http://${SERVER_IP}:${SERVICE_PORT}"
+    fi
+    echo ""
+    printf "%b📝 常用命令:%b\n" "${BOLD}" "${NC}"
+    echo "   cd $INSTALL_DIR"
+    echo "   ./manage.sh start    # 启动服务"
+    echo "   ./manage.sh stop     # 停止服务"
+    echo "   ./manage.sh logs     # 查看日志"
+    echo "   ./manage.sh update   # 更新版本"
+    echo "   ./manage.sh status   # 查看状态"
+    echo ""
+    printf "%b📡 API 端点:%b\n" "${BOLD}" "${NC}"
+    echo "   GET  /api/v1/hero           # Hero Banner"
+    echo "   GET  /api/v1/latest         # 最新内容"
+    echo "   GET  /api/v1/movies         # 电影分类"
+    echo "   GET  /api/v1/tv             # 电视剧分类"
+    echo "   GET  /api/v1/new            # 新上线"
+    echo "   GET  /api/v1/search?q=关键词 # 搜索"
+    echo "   GET  /api/v1/detail/:id     # 详情"
+    echo "   GET  /api/v1/category       # 分类分页"
+    echo ""
+    printf "%b⚙️  修改配置:%b\n" "${BOLD}" "${NC}"
+    printf "   配置文件位置: %b%s/.env%b\n" "${CYAN}" "$INSTALL_DIR" "${NC}"
+    printf "   修改后执行: %b./manage.sh restart%b\n" "${CYAN}" "${NC}"
     echo ""
     
-    echo -e "${CYAN}${BOLD}API 端点:${NC}"
-    echo ""
-    echo "  GET  /api/v1/hero           # Hero Banner"
-    echo "  GET  /api/v1/latest         # 最新内容"
-    echo "  GET  /api/v1/movies         # 电影分类"
-    echo "  GET  /api/v1/tv             # 电视剧分类"
-    echo "  GET  /api/v1/new            # 新上线"
-    echo "  GET  /api/v1/search?q=关键词 # 搜索"
-    echo "  GET  /api/v1/detail/:id     # 详情"
-    echo "  GET  /api/v1/category       # 分类分页"
+    # 显示服务状态
+    printf "%b📊 当前状态:%b\n" "${BOLD}" "${NC}"
+    cd "$INSTALL_DIR"
+    $COMPOSE_CMD ps
     echo ""
     
-    echo -e "${YELLOW}提示: 如果无法访问，请检查防火墙是否开放端口 ${SERVICE_PORT}${NC}"
+    print_color "${YELLOW}提示: 如果无法访问，请检查防火墙是否开放端口 ${SERVICE_PORT}${NC}\n"
     echo ""
 }
 
-# 主流程
+# ==================== 主程序 ====================
 main() {
-    show_banner
-    
-    check_root
-    check_system
-    check_docker
-    check_docker_compose
-    create_install_dir
-    configure_env
-    create_docker_compose
-    pull_images
-    start_services
-    create_manage_script
-    
-    show_complete
+    print_banner
+    check_dependencies
+    interactive_config
+    create_config_files
+    deploy_services
+    create_global_command
+    show_completion
 }
 
-# 执行主流程
+# 运行主程序
 main

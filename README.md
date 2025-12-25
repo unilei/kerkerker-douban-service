@@ -155,7 +155,7 @@ TMDB_IMAGE_BASE=https://image.tmdb.org/t/p/original
 
 ```bash
 # 使用 curl
-curl -fsSL https://raw.githubusercontent.com/你的用户名/kerkerker-douban-service/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/unilei/kerkerker-douban-service/refs/heads/master/scripts/install.sh | bash
 
 # 使用 wget
 wget -qO- https://raw.githubusercontent.com/你的用户名/kerkerker-douban-service/main/scripts/install.sh | bash
