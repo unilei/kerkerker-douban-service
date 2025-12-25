@@ -162,11 +162,46 @@ read_input() {
         fi
     fi
     
+    # 清理输入值（移除不可见字符和首尾空格）
+    _value=$(printf '%s' "$_value" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    
     if [ -z "$_value" ] && [ -n "$_default" ]; then
         echo "$_default"
     else
         echo "$_value"
     fi
+}
+
+# 规范化路径（转换为绝对路径）
+normalize_path() {
+    _path="$1"
+    
+    # 移除不可见字符
+    _path=$(printf '%s' "$_path" | tr -cd '[:print:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    
+    # 如果为空，返回当前目录
+    if [ -z "$_path" ]; then
+        pwd
+        return
+    fi
+    
+    # 展开 ~ 为 $HOME
+    case "$_path" in
+        "~"/*) _path="$HOME${_path#\~}" ;;
+        "~") _path="$HOME" ;;
+    esac
+    
+    # 转换相对路径为绝对路径
+    case "$_path" in
+        /*) 
+            # 已经是绝对路径
+            echo "$_path"
+            ;;
+        *)
+            # 相对路径，转换为绝对路径
+            echo "$(pwd)/$_path"
+            ;;
+    esac
 }
 
 # 验证端口号 (POSIX 兼容)
@@ -294,7 +329,8 @@ interactive_config() {
     echo ""
     
     # 安装目录
-    INSTALL_DIR=$(read_input "安装目录" "$INSTALL_DIR")
+    _input_dir=$(read_input "安装目录" "$INSTALL_DIR")
+    INSTALL_DIR=$(normalize_path "$_input_dir")
     
     # 服务端口
     while true; do
