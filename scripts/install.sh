@@ -443,7 +443,7 @@ services:
 
   mongo:
     image: mongo:7
-    container_name: kerkerker-mongo
+    container_name: douban-mongo
     volumes:
       - mongo_data:/data/db
     restart: unless-stopped
@@ -452,7 +452,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: kerkerker-redis
+    container_name: douban-redis
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
