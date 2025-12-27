@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"kerkerker-douban-service/internal/config"
@@ -62,8 +65,8 @@ func main() {
 		log.Info().Int("keys", tmdbService.KeyCount()).Msg("🎬 TMDB service enabled (轮询模式)")
 	}
 
-	// Initialize handlers
-	heroHandler := handler.NewHeroHandler(doubanService, tmdbService, cache)
+	// Initialize handlers with configured cache TTL
+	heroHandler := handler.NewHeroHandler(doubanService, tmdbService, cache, cfg.CacheTTLHero)
 	categoryHandler := handler.NewCategoryHandler(doubanService, cache)
 	detailHandler := handler.NewDetailHandler(doubanService, cache)
 	latestHandler := handler.NewLatestHandler(doubanService, cache)
@@ -93,56 +96,81 @@ func main() {
 		})
 	})
 
-	// API routes
+	// API routes - 公开访问
 	api := r.Group("/api/v1")
 	{
-		// Status and Analytics (for admin dashboard)
+		// 公开 GET 接口
 		api.GET("/status", adminHandler.GetStatus)
-		api.GET("/analytics", adminHandler.GetAnalytics)
-		api.GET("/analytics/endpoint", adminHandler.GetEndpointStats)
-		api.DELETE("/analytics", adminHandler.ResetAnalytics)
-
-		// Hero Banner
 		api.GET("/hero", heroHandler.GetHero)
-		api.DELETE("/hero", heroHandler.DeleteHeroCache)
-
-		// Category
 		api.GET("/category", categoryHandler.GetCategory)
-		api.DELETE("/category", categoryHandler.DeleteCategoryCache)
-
-		// Detail
 		api.GET("/detail/:id", detailHandler.GetDetail)
-		api.DELETE("/detail/:id", detailHandler.DeleteDetailCache)
-		api.DELETE("/detail", detailHandler.DeleteAllDetailCache)
-
-		// Latest
 		api.GET("/latest", latestHandler.GetLatest)
-		api.DELETE("/latest", latestHandler.DeleteLatestCache)
-
-		// Movies
 		api.GET("/movies", moviesHandler.GetMovies)
-		api.DELETE("/movies", moviesHandler.DeleteMoviesCache)
-
-		// TV
 		api.GET("/tv", tvHandler.GetTV)
-		api.DELETE("/tv", tvHandler.DeleteTVCache)
-
-		// New
 		api.GET("/new", newHandler.GetNew)
-		api.DELETE("/new", newHandler.DeleteNewCache)
-
-		// Search
 		api.GET("/search", searchHandler.Search)
 		api.POST("/search", searchHandler.GetSearchTags)
-		api.DELETE("/search", searchHandler.DeleteSearchCache)
 	}
 
-	// Start server
+	// Admin routes - 需要认证（如果配置了 ADMIN_API_KEY）
+	admin := r.Group("/api/v1")
+	admin.Use(middleware.AdminAuth(cfg.AdminAPIKey))
+	{
+		// Analytics（查询也需要认证保护）
+		admin.GET("/analytics", adminHandler.GetAnalytics)
+		admin.GET("/analytics/endpoint", adminHandler.GetEndpointStats)
+		admin.DELETE("/analytics", adminHandler.ResetAnalytics)
+
+		// 缓存管理
+		admin.DELETE("/hero", heroHandler.DeleteHeroCache)
+		admin.DELETE("/category", categoryHandler.DeleteCategoryCache)
+		admin.DELETE("/detail/:id", detailHandler.DeleteDetailCache)
+		admin.DELETE("/detail", detailHandler.DeleteAllDetailCache)
+		admin.DELETE("/latest", latestHandler.DeleteLatestCache)
+		admin.DELETE("/movies", moviesHandler.DeleteMoviesCache)
+		admin.DELETE("/tv", tvHandler.DeleteTVCache)
+		admin.DELETE("/new", newHandler.DeleteNewCache)
+		admin.DELETE("/search", searchHandler.DeleteSearchCache)
+	}
+
+	// 日志输出认证状态
+	if cfg.AdminAPIKey != "" {
+		log.Info().Msg("🔐 Admin API 认证已启用")
+	} else {
+		log.Warn().Msg("⚠️  Admin API 未配置认证，管理接口对外开放")
+	}
+
+	// Create HTTP server with graceful shutdown support
 	addr := ":" + cfg.Port
-	log.Info().Str("addr", addr).Msg("🌐 Server listening")
-	log.Info().Str("admin", "http://localhost"+addr+"/admin").Msg("📊 Admin dashboard available")
-
-	if err := r.Run(addr); err != nil {
-		log.Fatal().Err(err).Msg("Failed to start server")
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: r,
 	}
+
+	// Start server in a goroutine
+	go func() {
+		log.Info().Str("addr", addr).Msg("🌐 Server listening")
+		log.Info().Str("admin", "http://localhost"+addr+"/admin").Msg("📊 Admin dashboard available")
+
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal().Err(err).Msg("Failed to start server")
+		}
+	}()
+
+	// Wait for interrupt signal for graceful shutdown
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Info().Msg("🛑 Shutting down server...")
+
+	// Give outstanding requests a deadline for completion
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Error().Err(err).Msg("Server forced to shutdown")
+	}
+
+	log.Info().Msg("👋 Server exited")
 }

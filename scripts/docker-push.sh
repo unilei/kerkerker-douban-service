@@ -99,14 +99,17 @@ check_login() {
     fi
 
     log_info "检查 Docker Hub 登录状态..."
-    if ! docker info 2>/dev/null | grep -q "Username"; then
+    # 使用 docker login 状态检查或尝试检查凭据文件
+    if [ ! -f "$HOME/.docker/config.json" ] || ! grep -q "auth" "$HOME/.docker/config.json" 2>/dev/null; then
         log_warn "未登录 Docker Hub，正在登录..."
         docker login
+    else
+        log_info "已检测到 Docker 登录凭据"
     fi
-    log_success "Docker Hub 登录成功"
+    log_success "Docker Hub 登录检查完成"
 }
 
-# 构建镜像
+# 构建镜像 (单平台)
 build_image() {
     local full_image_name="${DOCKER_USERNAME}/${IMAGE_NAME}"
     
@@ -118,10 +121,9 @@ build_image() {
     
     cd "$PROJECT_DIR"
     
-    # 构建多平台镜像
-    log_info "构建镜像中..."
+    # 构建当前平台镜像 (普通 build 不支持多平台)
+    log_info "构建当前平台镜像..."
     docker build \
-        --platform linux/amd64,linux/arm64 \
         -t "${full_image_name}:${VERSION}" \
         -t "${full_image_name}:latest" \
         . 2>&1 | while read line; do echo "  $line"; done

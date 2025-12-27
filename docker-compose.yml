@@ -9,25 +9,14 @@ services:
     environment:
       - PORT=8080
       - GIN_MODE=release
-      - MONGODB_URI=mongodb://mongo:27017
-      - MONGODB_DATABASE=douban_api
       - REDIS_URL=redis://redis:6379
       - DOUBAN_API_PROXY=${DOUBAN_API_PROXY:-}
       - TMDB_API_KEY=${TMDB_API_KEY:-}
       - TMDB_BASE_URL=${TMDB_BASE_URL:-https://api.themoviedb.org/3}
       - TMDB_IMAGE_BASE=${TMDB_IMAGE_BASE:-https://image.tmdb.org/t/p/original}
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-}
     depends_on:
-      - mongo
       - redis
-    restart: unless-stopped
-    networks:
-      - douban-network
-
-  mongo:
-    image: mongo:7
-    container_name: douban-mongo
-    volumes:
-      - mongo_data:/data/db
     restart: unless-stopped
     networks:
       - douban-network
@@ -47,5 +36,4 @@ networks:
     driver: bridge
 
 volumes:
-  mongo_data:
   redis_data:

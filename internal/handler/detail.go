@@ -49,25 +49,7 @@ func (h *DetailHandler) GetDetail(c *gin.Context) {
 	var cachedData model.SubjectDetail
 	if err := h.cache.Get(ctx, cacheKey, &cachedData); err == nil {
 		c.Set("cache_source", "redis-cache") // 标记缓存命中供 metrics 追踪
-		c.JSON(http.StatusOK, gin.H{
-			"id":              cachedData.ID,
-			"title":           cachedData.Title,
-			"rate":            cachedData.Rate,
-			"url":             cachedData.URL,
-			"cover":           cachedData.Cover,
-			"types":           cachedData.Types,
-			"release_year":    cachedData.ReleaseYear,
-			"directors":       cachedData.Directors,
-			"actors":          cachedData.Actors,
-			"duration":        cachedData.Duration,
-			"region":          cachedData.Region,
-			"episodes_count":  cachedData.EpisodesCount,
-			"short_comment":   cachedData.ShortComment,
-			"photos":          cachedData.Photos,
-			"comments":        cachedData.Comments,
-			"recommendations": cachedData.Recommendations,
-			"source":          "redis-cache",
-		})
+		c.JSON(http.StatusOK, buildDetailResponse(cachedData, "redis-cache"))
 		return
 	}
 
@@ -165,25 +147,7 @@ func (h *DetailHandler) GetDetail(c *gin.Context) {
 	// Cache result
 	h.cache.Set(ctx, cacheKey, detailData)
 
-	c.JSON(http.StatusOK, gin.H{
-		"id":              detailData.ID,
-		"title":           detailData.Title,
-		"rate":            detailData.Rate,
-		"url":             detailData.URL,
-		"cover":           detailData.Cover,
-		"types":           detailData.Types,
-		"release_year":    detailData.ReleaseYear,
-		"directors":       detailData.Directors,
-		"actors":          detailData.Actors,
-		"duration":        detailData.Duration,
-		"region":          detailData.Region,
-		"episodes_count":  detailData.EpisodesCount,
-		"short_comment":   detailData.ShortComment,
-		"photos":          detailData.Photos,
-		"comments":        detailData.Comments,
-		"recommendations": detailData.Recommendations,
-		"source":          "fresh",
-	})
+	c.JSON(http.StatusOK, buildDetailResponse(detailData, "fresh"))
 }
 
 // DeleteDetailCache clears detail cache
@@ -246,4 +210,27 @@ func (h *DetailHandler) DeleteAllDetailCache(c *gin.Context) {
 		Code:    200,
 		Message: fmt.Sprintf("影片详情缓存已清除 (%d 条)", deleted),
 	})
+}
+
+// buildDetailResponse creates a standardized response for detail data
+func buildDetailResponse(data model.SubjectDetail, source string) gin.H {
+	return gin.H{
+		"id":              data.ID,
+		"title":           data.Title,
+		"rate":            data.Rate,
+		"url":             data.URL,
+		"cover":           data.Cover,
+		"types":           data.Types,
+		"release_year":    data.ReleaseYear,
+		"directors":       data.Directors,
+		"actors":          data.Actors,
+		"duration":        data.Duration,
+		"region":          data.Region,
+		"episodes_count":  data.EpisodesCount,
+		"short_comment":   data.ShortComment,
+		"photos":          data.Photos,
+		"comments":        data.Comments,
+		"recommendations": data.Recommendations,
+		"source":          source,
+	}
 }

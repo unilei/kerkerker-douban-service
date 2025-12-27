@@ -33,7 +33,8 @@ func NewCache(redisURL string, ttl time.Duration) (*Cache, error) {
 		return nil, fmt.Errorf("failed to connect to redis: %w", err)
 	}
 
-	log.Info().Str("url", redisURL).Msg("✅ Redis connected")
+	// 只记录地址，不记录完整 URL（可能包含密码）
+	log.Info().Str("addr", opt.Addr).Msg("✅ Redis connected")
 
 	return &Cache{
 		client:     client,

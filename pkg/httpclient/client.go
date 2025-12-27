@@ -119,10 +119,10 @@ func (c *Client) Fetch(targetURL string) ([]byte, error) {
 			}
 			continue
 		}
-		defer resp.Body.Close()
 
 		// Handle rate limiting
 		if resp.StatusCode == 403 || resp.StatusCode == 429 {
+			resp.Body.Close() // 立即关闭，避免泄漏
 			lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
 			log.Warn().
 				Int("attempt", attempt).
@@ -138,11 +138,15 @@ func (c *Client) Fetch(targetURL string) ([]byte, error) {
 		}
 
 		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close() // 立即关闭，避免泄漏
 			lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
 			continue
 		}
 
+		// 读取并立即关闭 body
 		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close() // 立即关闭，不使用 defer
+
 		if err != nil {
 			lastErr = err
 			continue

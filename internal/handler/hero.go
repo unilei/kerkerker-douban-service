@@ -2,10 +2,13 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"kerkerker-douban-service/internal/model"
 	"kerkerker-douban-service/internal/repository"
@@ -16,27 +19,31 @@ import (
 )
 
 const heroDataCacheKey = "douban:hero:movies"
+const defaultRequestTimeout = 30 * time.Second
 
 // HeroHandler handles Hero Banner API requests
 type HeroHandler struct {
 	doubanService *service.DoubanService
 	tmdbService   *service.TMDBService
 	cache         *repository.Cache
+	cacheTTL      time.Duration
 }
 
 // NewHeroHandler creates a new HeroHandler
-func NewHeroHandler(douban *service.DoubanService, tmdb *service.TMDBService, cache *repository.Cache) *HeroHandler {
+func NewHeroHandler(douban *service.DoubanService, tmdb *service.TMDBService, cache *repository.Cache, cacheTTL time.Duration) *HeroHandler {
 	return &HeroHandler{
 		doubanService: douban,
 		tmdbService:   tmdb,
 		cache:         cache,
+		cacheTTL:      cacheTTL,
 	}
 }
 
 // GetHero returns Hero Banner data
 // GET /api/v1/hero
 func (h *HeroHandler) GetHero(c *gin.Context) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(c.Request.Context(), defaultRequestTimeout)
+	defer cancel()
 
 	// Check cache
 	var cachedData []model.HeroMovie
@@ -52,7 +59,7 @@ func (h *HeroHandler) GetHero(c *gin.Context) {
 
 	proxyInfo := ""
 	if h.doubanService.HasProxy() {
-		proxyInfo = " (代理: " + string(rune(h.doubanService.ProxyCount())) + "个)"
+		proxyInfo = fmt.Sprintf(" (代理: %d个)", h.doubanService.ProxyCount())
 	}
 	log.Info().Str("proxy", proxyInfo).Msg("🎬 开始获取 Hero Banner 数据...")
 
@@ -74,54 +81,90 @@ func (h *HeroHandler) GetHero(c *gin.Context) {
 		return rateI > rateJ
 	})
 
-	if len(subjects) > 5 {
-		subjects = subjects[:5]
+	const maxHeroCount = 5
+	if len(subjects) > maxHeroCount {
+		subjects = subjects[:maxHeroCount]
 	}
 
-	// Fetch TMDB backdrops in parallel
-	heroMovies := make([]model.HeroMovie, 0, len(subjects))
-	var mu sync.Mutex
+	// 优化1: 使用带索引的结果槽位，保持评分排序顺序
+	type heroResult struct {
+		index int
+		hero  *model.HeroMovie
+	}
+
+	resultChan := make(chan heroResult, len(subjects))
 	var wg sync.WaitGroup
 
-	for _, movie := range subjects {
+	// 优化2: 为每个 goroutine 创建子 context，控制单个请求超时
+	perMovieTimeout := 10 * time.Second
+
+	for idx, movie := range subjects {
 		wg.Add(1)
-		go func(m model.Subject) {
+		go func(index int, m model.Subject) {
 			defer wg.Done()
+
+			// 为单个电影的请求创建超时 context
+			movieCtx, movieCancel := context.WithTimeout(ctx, perMovieTimeout)
+			defer movieCancel()
 
 			// Get movie details for genres
 			var genres []string
 			var description string
 			var releaseYear string
 
-			if detail, err := h.doubanService.GetSubjectAbstract(m.ID); err == nil && detail.Subject != nil {
-				genres = detail.Subject.Types
-				releaseYear = detail.Subject.ReleaseYear
-				if detail.Subject.ShortComment != nil {
-					description = detail.Subject.ShortComment.Content
+			// 使用 channel 接收详情结果，实现超时控制
+			detailDone := make(chan struct{})
+			go func() {
+				if detail, err := h.doubanService.GetSubjectAbstract(m.ID); err == nil && detail.Subject != nil {
+					genres = detail.Subject.Types
+					releaseYear = detail.Subject.ReleaseYear
+					if detail.Subject.ShortComment != nil {
+						description = detail.Subject.ShortComment.Content
+					}
 				}
+				close(detailDone)
+			}()
+
+			select {
+			case <-detailDone:
+				// 详情获取成功
+			case <-movieCtx.Done():
+				log.Debug().Str("title", m.Title).Msg("⏱️ 获取详情超时")
 			}
 
 			// Get TMDB backdrop
 			var backdropURL string
 			if h.tmdbService.IsConfigured() {
-				backdropURL, _ = h.tmdbService.SearchMovieBackdrop(m.Title, releaseYear)
-			}
+				tmdbDone := make(chan struct{})
+				go func() {
+					backdropURL, _ = h.tmdbService.SearchMovieBackdrop(m.Title, releaseYear)
+					close(tmdbDone)
+				}()
 
-			// Skip if no backdrop
-			if backdropURL == "" {
-				log.Debug().Str("title", m.Title).Msg("Skipping - no TMDB backdrop")
-				return
+				select {
+				case <-tmdbDone:
+					// TMDB 请求完成
+				case <-movieCtx.Done():
+					log.Debug().Str("title", m.Title).Msg("⏱️ TMDB 请求超时")
+				}
 			}
 
 			// Convert cover to high quality
 			cover := getHighQualityPoster(m.Cover)
 
-			hero := model.HeroMovie{
+			// 优化3: 降级策略 - 无 backdrop 时使用封面
+			posterHorizontal := backdropURL
+			if posterHorizontal == "" {
+				posterHorizontal = cover // 使用封面作为备选
+				log.Debug().Str("title", m.Title).Msg("📸 使用封面作为横幅备选")
+			}
+
+			hero := &model.HeroMovie{
 				ID:               m.ID,
 				Title:            m.Title,
 				Rate:             m.Rate,
 				Cover:            cover,
-				PosterHorizontal: backdropURL,
+				PosterHorizontal: posterHorizontal,
 				PosterVertical:   cover,
 				URL:              m.URL,
 				EpisodeInfo:      m.EpisodeInfo,
@@ -129,17 +172,33 @@ func (h *HeroHandler) GetHero(c *gin.Context) {
 				Description:      description,
 			}
 
-			mu.Lock()
-			heroMovies = append(heroMovies, hero)
-			mu.Unlock()
-		}(movie)
+			resultChan <- heroResult{index: index, hero: hero}
+		}(idx, movie)
 	}
 
-	wg.Wait()
+	// 等待所有 goroutine 完成
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	// 收集结果并按原始索引排序
+	results := make([]*model.HeroMovie, len(subjects))
+	for result := range resultChan {
+		results[result.index] = result.hero
+	}
+
+	// 过滤掉 nil 结果并转换为 slice
+	heroMovies := make([]model.HeroMovie, 0, len(subjects))
+	for _, hero := range results {
+		if hero != nil {
+			heroMovies = append(heroMovies, *hero)
+		}
+	}
 
 	// Cache the result
 	if len(heroMovies) > 0 {
-		h.cache.Set(ctx, heroDataCacheKey, heroMovies)
+		h.cache.Set(ctx, heroDataCacheKey, heroMovies, h.cacheTTL)
 	}
 
 	log.Info().Int("count", len(heroMovies)).Msg("✅ Hero Banner 数据获取成功")
@@ -176,21 +235,6 @@ func parseFloat(s string) float64 {
 	if s == "" {
 		return 0
 	}
-	var result float64
-	for i, c := range s {
-		if c >= '0' && c <= '9' {
-			result = result*10 + float64(c-'0')
-		} else if c == '.' {
-			// Handle decimal part
-			decimal := 0.1
-			for _, d := range s[i+1:] {
-				if d >= '0' && d <= '9' {
-					result += float64(d-'0') * decimal
-					decimal /= 10
-				}
-			}
-			break
-		}
-	}
+	result, _ := strconv.ParseFloat(s, 64)
 	return result
 }

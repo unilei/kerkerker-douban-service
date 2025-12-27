@@ -546,201 +546,451 @@
           grid-template-columns: 1fr;
         }
       }
+
+      /* Login Page Styles */
+      .login-page {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: var(--bg-primary);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+      }
+
+      .login-page.hidden {
+        display: none;
+      }
+
+      .login-card {
+        background: rgba(26, 26, 46, 0.95);
+        backdrop-filter: blur(20px);
+        border: 1px solid var(--border);
+        border-radius: 24px;
+        padding: 48px;
+        width: 100%;
+        max-width: 420px;
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        animation: fadeInUp 0.5s ease;
+      }
+
+      @keyframes fadeInUp {
+        from {
+          opacity: 0;
+          transform: translateY(20px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .login-logo {
+        text-align: center;
+        margin-bottom: 32px;
+      }
+
+      .login-logo-icon {
+        width: 72px;
+        height: 72px;
+        background: linear-gradient(135deg, var(--accent), #ff6b81);
+        border-radius: 18px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 36px;
+        margin-bottom: 16px;
+        box-shadow: 0 8px 24px rgba(233, 69, 96, 0.3);
+      }
+
+      .login-title {
+        font-size: 24px;
+        font-weight: 700;
+        margin-bottom: 8px;
+      }
+
+      .login-title span {
+        color: var(--accent);
+      }
+
+      .login-subtitle {
+        font-size: 14px;
+        color: var(--text-secondary);
+      }
+
+      .login-form {
+        margin-top: 32px;
+      }
+
+      .login-input-group {
+        margin-bottom: 24px;
+      }
+
+      .login-label {
+        display: block;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-secondary);
+        margin-bottom: 8px;
+      }
+
+      .login-input {
+        width: 100%;
+        padding: 14px 16px;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        color: var(--text-primary);
+        font-size: 15px;
+        transition: all 0.2s;
+      }
+
+      .login-input:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(233, 69, 96, 0.2);
+      }
+
+      .login-input::placeholder {
+        color: var(--text-secondary);
+        opacity: 0.6;
+      }
+
+      .login-btn {
+        width: 100%;
+        padding: 16px;
+        background: linear-gradient(135deg, var(--accent), #ff6b81);
+        border: none;
+        border-radius: 12px;
+        color: white;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+      }
+
+      .login-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 24px rgba(233, 69, 96, 0.4);
+      }
+
+      .login-btn:active {
+        transform: translateY(0);
+      }
+
+      .login-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      .login-error {
+        background: rgba(255, 71, 87, 0.1);
+        border: 1px solid rgba(255, 71, 87, 0.3);
+        border-radius: 10px;
+        padding: 12px 16px;
+        margin-bottom: 20px;
+        color: var(--error);
+        font-size: 13px;
+        display: none;
+      }
+
+      .login-error.show {
+        display: block;
+        animation: shake 0.5s ease;
+      }
+
+      @keyframes shake {
+        0%,
+        100% {
+          transform: translateX(0);
+        }
+        25% {
+          transform: translateX(-5px);
+        }
+        75% {
+          transform: translateX(5px);
+        }
+      }
+
+      .login-footer {
+        text-align: center;
+        margin-top: 24px;
+        font-size: 12px;
+        color: var(--text-secondary);
+      }
+
+      /* Logout Button */
+      .logout-btn {
+        padding: 8px 16px;
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text-secondary);
+        font-size: 13px;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .logout-btn:hover {
+        background: rgba(255, 71, 87, 0.2);
+        border-color: var(--error);
+        color: var(--error);
+      }
+
+      .dashboard {
+        transition: opacity 0.3s;
+      }
+
+      .dashboard.hidden {
+        display: none;
+      }
     </style>
   </head>
   <body>
-    <div class="container">
-      <!-- Header -->
-      <header class="header">
-        <div class="logo">
-          <div class="logo-icon">🎬</div>
-          <div class="logo-text">Kerkerker <span>Douban</span> Service</div>
+    <!-- Login Page -->
+    <div id="login-page" class="login-page">
+      <div class="login-card">
+        <div class="login-logo">
+          <div class="login-logo-icon">🎬</div>
+          <h1 class="login-title">Kerkerker <span>Douban</span></h1>
+          <p class="login-subtitle">管理面板</p>
         </div>
-        <div class="status-badge">
-          <div class="status-dot"></div>
-          <span>服务运行中</span>
+        <div id="login-error" class="login-error">
+          API Key 无效，请重新输入
         </div>
-      </header>
-
-      <!-- Tabs -->
-      <div class="tabs">
-        <div class="tab active" onclick="switchTab('analytics')">
-          📊 数据分析
+        <form class="login-form" onsubmit="handleLogin(event)">
+          <div class="login-input-group">
+            <label class="login-label">Admin API Key</label>
+            <input
+              type="password"
+              id="login-api-key"
+              class="login-input"
+              placeholder="请输入您的 API Key"
+              autocomplete="current-password"
+            />
+          </div>
+          <button type="submit" class="login-btn" id="login-btn">
+            <span>登 录</span>
+          </button>
+        </form>
+        <div class="login-footer">
+          安全提示：API Key 将保存在本地浏览器中
         </div>
-        <div class="tab" onclick="switchTab('api')">📡 API 端点</div>
-        <div class="tab" onclick="switchTab('cache')">🗄️ 缓存管理</div>
       </div>
+    </div>
 
-      <!-- Analytics Tab -->
-      <div id="tab-analytics" class="tab-content active">
-        <!-- Stats -->
-        <div class="stats-grid">
-          <div class="stat-card">
-            <div class="stat-label">总 API 调用</div>
-            <div class="stat-value accent" id="total-calls">-</div>
+    <!-- Dashboard -->
+    <div id="dashboard" class="dashboard hidden">
+      <div class="container">
+        <!-- Header -->
+        <header class="header">
+          <div class="logo">
+            <div class="logo-icon">🎬</div>
+            <div class="logo-text">Kerkerker <span>Douban</span> Service</div>
           </div>
-          <div class="stat-card">
-            <div class="stat-label">今日调用</div>
-            <div class="stat-value success" id="today-calls">-</div>
+          <div style="display: flex; gap: 12px; align-items: center">
+            <div class="status-badge">
+              <div class="status-dot"></div>
+              <span>服务运行中</span>
+            </div>
+            <button class="logout-btn" onclick="logout()">
+              <span>🚪</span>
+              <span>退出登录</span>
+            </button>
           </div>
-          <div class="stat-card">
-            <div class="stat-label">平均响应时间</div>
-            <div class="stat-value warning" id="avg-latency">-</div>
-            <div class="stat-sub">毫秒</div>
+        </header>
+
+        <!-- Tabs -->
+        <div class="tabs">
+          <div class="tab active" onclick="switchTab('analytics')">
+            📊 数据分析
           </div>
-          <div class="stat-card">
-            <div class="stat-label">缓存命中率</div>
-            <div class="stat-value success" id="cache-rate">-</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">错误率</div>
-            <div class="stat-value" id="error-rate">-</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">运行时间</div>
-            <div class="stat-value" id="uptime">-</div>
-          </div>
+          <div class="tab" onclick="switchTab('api')">📡 API 端点</div>
+          <div class="tab" onclick="switchTab('cache')">🗄️ 缓存管理</div>
         </div>
 
-        <!-- Daily Trend Chart -->
-        <section class="section">
-          <div class="section-header">
-            <h2 class="section-title">📈 7日调用趋势</h2>
-          </div>
-          <div class="chart-container" id="trend-chart"></div>
-          <div class="chart-labels" id="trend-labels"></div>
-        </section>
-
-        <!-- Top Endpoints -->
-        <section class="section">
-          <div class="section-header">
-            <h2 class="section-title">🔥 热门端点</h2>
-            <button class="btn btn-danger" onclick="resetAnalytics()">
-              重置统计
-            </button>
-          </div>
-          <table class="endpoint-table">
-            <thead>
-              <tr>
-                <th>端点</th>
-                <th>调用次数</th>
-                <th>平均延迟</th>
-                <th>缓存命中</th>
-                <th>成功率</th>
-              </tr>
-            </thead>
-            <tbody id="endpoints-body">
-              <tr>
-                <td
-                  colspan="5"
-                  style="text-align: center; color: var(--text-secondary)"
-                >
-                  加载中...
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </section>
-      </div>
-
-      <!-- API Tab -->
-      <div id="tab-api" class="tab-content">
-        <section class="section">
-          <div class="section-header">
-            <h2 class="section-title">📡 API 端点</h2>
-          </div>
-          <div class="api-grid" id="api-list"></div>
-        </section>
-
-        <!-- Response Panel -->
-        <section class="section response-panel">
-          <div class="response-header">
-            <h3 class="response-title">📋 响应结果</h3>
-            <span class="response-meta" id="response-meta"></span>
-          </div>
-          <div class="response-box">
-            <pre id="response-content">点击 "测试" 按钮查看 API 响应...</pre>
-          </div>
-        </section>
-      </div>
-
-      <!-- Cache Tab -->
-      <div id="tab-cache" class="tab-content">
-        <section class="section">
-          <div class="section-header">
-            <h2 class="section-title">🗄️ 缓存管理</h2>
-            <button class="btn btn-danger" onclick="clearAllCache()">
-              清除所有缓存
-            </button>
-          </div>
-          <div class="cache-controls">
-            <button
-              class="btn btn-secondary cache-btn"
-              onclick="clearCache('hero')"
-            >
-              🎬 Hero Banner
-            </button>
-            <button
-              class="btn btn-secondary cache-btn"
-              onclick="clearCache('category')"
-            >
-              📑 分类分页
-            </button>
-            <button
-              class="btn btn-secondary cache-btn"
-              onclick="clearCache('detail')"
-            >
-              🎞️ 影片详情
-            </button>
-            <button
-              class="btn btn-secondary cache-btn"
-              onclick="clearCache('latest')"
-            >
-              🆕 最新内容
-            </button>
-            <button
-              class="btn btn-secondary cache-btn"
-              onclick="clearCache('movies')"
-            >
-              🎥 电影分类
-            </button>
-            <button
-              class="btn btn-secondary cache-btn"
-              onclick="clearCache('tv')"
-            >
-              📺 电视剧分类
-            </button>
-            <button
-              class="btn btn-secondary cache-btn"
-              onclick="clearCache('new')"
-            >
-              ✨ 新上线
-            </button>
-            <button
-              class="btn btn-secondary cache-btn"
-              onclick="clearCache('search')"
-            >
-              🔍 搜索
-            </button>
-          </div>
-        </section>
-
-        <!-- Service Status -->
-        <section class="section">
-          <div class="section-header">
-            <h2 class="section-title">⚙️ 服务状态</h2>
-          </div>
+        <!-- Analytics Tab -->
+        <div id="tab-analytics" class="tab-content active">
+          <!-- Stats -->
           <div class="stats-grid">
             <div class="stat-card">
-              <div class="stat-label">代理状态</div>
-              <div class="stat-value" id="proxy-status">检测中...</div>
+              <div class="stat-label">总 API 调用</div>
+              <div class="stat-value accent" id="total-calls">-</div>
             </div>
             <div class="stat-card">
-              <div class="stat-label">TMDB</div>
-              <div class="stat-value" id="tmdb-status">检测中...</div>
+              <div class="stat-label">今日调用</div>
+              <div class="stat-value success" id="today-calls">-</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">平均响应时间</div>
+              <div class="stat-value warning" id="avg-latency">-</div>
+              <div class="stat-sub">毫秒</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">缓存命中率</div>
+              <div class="stat-value success" id="cache-rate">-</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">错误率</div>
+              <div class="stat-value" id="error-rate">-</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">运行时间</div>
+              <div class="stat-value" id="uptime">-</div>
             </div>
           </div>
-        </section>
+
+          <!-- Daily Trend Chart -->
+          <section class="section">
+            <div class="section-header">
+              <h2 class="section-title">📈 7日调用趋势</h2>
+            </div>
+            <div class="chart-container" id="trend-chart"></div>
+            <div class="chart-labels" id="trend-labels"></div>
+          </section>
+
+          <!-- Top Endpoints -->
+          <section class="section">
+            <div class="section-header">
+              <h2 class="section-title">🔥 热门端点</h2>
+              <button class="btn btn-danger" onclick="resetAnalytics()">
+                重置统计
+              </button>
+            </div>
+            <table class="endpoint-table">
+              <thead>
+                <tr>
+                  <th>端点</th>
+                  <th>调用次数</th>
+                  <th>平均延迟</th>
+                  <th>缓存命中</th>
+                  <th>成功率</th>
+                </tr>
+              </thead>
+              <tbody id="endpoints-body">
+                <tr>
+                  <td
+                    colspan="5"
+                    style="text-align: center; color: var(--text-secondary)"
+                  >
+                    加载中...
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+        </div>
+
+        <!-- API Tab -->
+        <div id="tab-api" class="tab-content">
+          <section class="section">
+            <div class="section-header">
+              <h2 class="section-title">📡 API 端点</h2>
+            </div>
+            <div class="api-grid" id="api-list"></div>
+          </section>
+
+          <!-- Response Panel -->
+          <section class="section response-panel">
+            <div class="response-header">
+              <h3 class="response-title">📋 响应结果</h3>
+              <span class="response-meta" id="response-meta"></span>
+            </div>
+            <div class="response-box">
+              <pre id="response-content">点击 "测试" 按钮查看 API 响应...</pre>
+            </div>
+          </section>
+        </div>
+
+        <!-- Cache Tab -->
+        <div id="tab-cache" class="tab-content">
+          <section class="section">
+            <div class="section-header">
+              <h2 class="section-title">🗄️ 缓存管理</h2>
+              <button class="btn btn-danger" onclick="clearAllCache()">
+                清除所有缓存
+              </button>
+            </div>
+            <div class="cache-controls">
+              <button
+                class="btn btn-secondary cache-btn"
+                onclick="clearCache('hero')"
+              >
+                🎬 Hero Banner
+              </button>
+              <button
+                class="btn btn-secondary cache-btn"
+                onclick="clearCache('category')"
+              >
+                📑 分类分页
+              </button>
+              <button
+                class="btn btn-secondary cache-btn"
+                onclick="clearCache('detail')"
+              >
+                🎞️ 影片详情
+              </button>
+              <button
+                class="btn btn-secondary cache-btn"
+                onclick="clearCache('latest')"
+              >
+                🆕 最新内容
+              </button>
+              <button
+                class="btn btn-secondary cache-btn"
+                onclick="clearCache('movies')"
+              >
+                🎥 电影分类
+              </button>
+              <button
+                class="btn btn-secondary cache-btn"
+                onclick="clearCache('tv')"
+              >
+                📺 电视剧分类
+              </button>
+              <button
+                class="btn btn-secondary cache-btn"
+                onclick="clearCache('new')"
+              >
+                ✨ 新上线
+              </button>
+              <button
+                class="btn btn-secondary cache-btn"
+                onclick="clearCache('search')"
+              >
+                🔍 搜索
+              </button>
+            </div>
+          </section>
+
+          <!-- Service Status -->
+          <section class="section">
+            <div class="section-header">
+              <h2 class="section-title">⚙️ 服务状态</h2>
+            </div>
+            <div class="stats-grid">
+              <div class="stat-card">
+                <div class="stat-label">代理状态</div>
+                <div class="stat-value" id="proxy-status">检测中...</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">TMDB</div>
+                <div class="stat-value" id="tmdb-status">检测中...</div>
+              </div>
+            </div>
+          </section>
+        </div>
       </div>
     </div>
 
@@ -800,6 +1050,128 @@
         },
       ];
 
+      // API Key 管理
+      let adminApiKey = localStorage.getItem("adminApiKey") || "";
+      let authRequired = true; // 默认假设需要认证
+
+      // 登录相关函数
+      async function checkAuthRequired() {
+        try {
+          // 通过调用 analytics API 检测是否需要认证
+          const response = await fetch(`${API_BASE}/api/v1/analytics`);
+          if (response.status === 401 || response.status === 403) {
+            authRequired = true;
+            return true;
+          }
+          // 如果返回 200，说明不需要认证
+          authRequired = false;
+          return false;
+        } catch (error) {
+          // 网络错误，默认需要认证
+          return true;
+        }
+      }
+
+      async function validateApiKey(apiKey) {
+        try {
+          const response = await fetch(`${API_BASE}/api/v1/analytics`, {
+            headers: { Authorization: `Bearer ${apiKey}` }
+          });
+          return response.status !== 401 && response.status !== 403;
+        } catch (error) {
+          return false;
+        }
+      }
+
+      async function handleLogin(event) {
+        event.preventDefault();
+        
+        const input = document.getElementById("login-api-key");
+        const errorEl = document.getElementById("login-error");
+        const btn = document.getElementById("login-btn");
+        const apiKey = input.value.trim();
+
+        if (!apiKey) {
+          errorEl.textContent = "请输入 API Key";
+          errorEl.classList.add("show");
+          return;
+        }
+
+        // 显示加载状态
+        btn.disabled = true;
+        btn.innerHTML = '<span class="loading"></span> 验证中...';
+        errorEl.classList.remove("show");
+
+        const isValid = await validateApiKey(apiKey);
+
+        if (isValid) {
+          adminApiKey = apiKey;
+          localStorage.setItem("adminApiKey", apiKey);
+          showDashboard();
+        } else {
+          errorEl.textContent = "API Key 无效，请重新输入";
+          errorEl.classList.add("show");
+          input.focus();
+        }
+
+        btn.disabled = false;
+        btn.innerHTML = '<span>登 录</span>';
+      }
+
+      function logout() {
+        adminApiKey = "";
+        localStorage.removeItem("adminApiKey");
+        showLoginPage();
+        showToast("已退出登录", "success");
+      }
+
+      function showLoginPage() {
+        document.getElementById("login-page").classList.remove("hidden");
+        document.getElementById("dashboard").classList.add("hidden");
+        document.getElementById("login-api-key").value = "";
+        document.getElementById("login-error").classList.remove("show");
+      }
+
+      function showDashboard() {
+        document.getElementById("login-page").classList.add("hidden");
+        document.getElementById("dashboard").classList.remove("hidden");
+        // 初始化仪表板
+        renderAPIs();
+        checkStatus();
+        loadAnalytics();
+      }
+
+      async function initAuth() {
+        const needsAuth = await checkAuthRequired();
+        
+        if (!needsAuth) {
+          // 不需要认证，直接显示仪表板
+          showDashboard();
+          return;
+        }
+
+        // 需要认证
+        if (adminApiKey) {
+          // 有保存的 API Key，验证是否有效
+          const isValid = await validateApiKey(adminApiKey);
+          if (isValid) {
+            showDashboard();
+            return;
+          }
+          // API Key 无效，清除并显示登录页
+          localStorage.removeItem("adminApiKey");
+          adminApiKey = "";
+        }
+
+        // 显示登录页
+        showLoginPage();
+      }
+
+      function getAuthHeaders() {
+        if (!adminApiKey) return {};
+        return { Authorization: `Bearer ${adminApiKey}` };
+      }
+
       // Tab switching
       function switchTab(tabName) {
         document
@@ -820,7 +1192,17 @@
       // Load analytics
       async function loadAnalytics() {
         try {
-          const response = await fetch(`${API_BASE}/api/v1/analytics`);
+          const response = await fetch(`${API_BASE}/api/v1/analytics`, {
+            headers: getAuthHeaders(),
+          });
+
+          if (response.status === 401 || response.status === 403) {
+            console.warn("Analytics requires authentication");
+            document.getElementById("total-calls").textContent = "🔒";
+            document.getElementById("today-calls").textContent = "需认证";
+            return;
+          }
+
           const result = await response.json();
           const data = result.data;
 
@@ -947,7 +1329,16 @@
         if (!confirm("确定要重置所有统计数据吗？")) return;
 
         try {
-          await fetch(`${API_BASE}/api/v1/analytics`, { method: "DELETE" });
+          const response = await fetch(`${API_BASE}/api/v1/analytics`, {
+            method: "DELETE",
+            headers: getAuthHeaders(),
+          });
+
+          if (response.status === 401 || response.status === 403) {
+            showToast("需要 Admin API Key 认证", "error");
+            return;
+          }
+
           showToast("统计数据已重置", "success");
           loadAnalytics();
         } catch (error) {
@@ -1019,7 +1410,14 @@
         try {
           const response = await fetch(`${API_BASE}/api/v1/${type}`, {
             method: "DELETE",
+            headers: getAuthHeaders(),
           });
+
+          if (response.status === 401 || response.status === 403) {
+            showToast("需要 Admin API Key 认证", "error");
+            return;
+          }
+
           const data = await response.json();
           showToast(data.message || "缓存已清除", "success");
         } catch (error) {
@@ -1029,7 +1427,16 @@
 
       // Clear all cache
       async function clearAllCache() {
-        const types = ["hero", "category", "detail", "latest", "movies", "tv", "new", "search"];
+        const types = [
+          "hero",
+          "category",
+          "detail",
+          "latest",
+          "movies",
+          "tv",
+          "new",
+          "search",
+        ];
         for (const type of types) {
           await clearCache(type);
         }
@@ -1070,9 +1477,7 @@
       }
 
       // Initialize
-      renderAPIs();
-      checkStatus();
-      loadAnalytics();
+      initAuth();
       setInterval(checkStatus, 30000);
       setInterval(loadAnalytics, 60000);
     </script>

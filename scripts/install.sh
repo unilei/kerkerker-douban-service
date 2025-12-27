@@ -357,6 +357,12 @@ interactive_config() {
     print_info "多个 API Key 用逗号分隔，将启用轮询负载均衡"
     TMDB_KEY=$(read_input "TMDB API Key (可选)" "")
     
+    # Admin API Key
+    echo ""
+    print_info "Admin API Key 用于保护管理接口 (缓存管理、统计重置等)"
+    print_info "如果不设置，管理接口将对外开放"
+    ADMIN_API_KEY=$(read_input "Admin API Key (可选，推荐设置)" "")
+    
     # 确认配置
     echo ""
     print_step "配置确认"
@@ -369,6 +375,11 @@ interactive_config() {
     fi
     if [ -n "$TMDB_KEY" ]; then
         printf "   %bTMDB API:%b       已设置\n" "${BOLD}" "${NC}"
+    fi
+    if [ -n "$ADMIN_API_KEY" ]; then
+        printf "   %bAdmin API:%b      已设置 (管理接口受保护)\n" "${BOLD}" "${NC}"
+    else
+        printf "   %bAdmin API:%b      未设置 (管理接口开放)\n" "${YELLOW}" "${NC}"
     fi
     echo ""
     
@@ -410,6 +421,16 @@ DOUBAN_API_PROXY=${DOUBAN_PROXY}
 TMDB_API_KEY=${TMDB_KEY}
 TMDB_BASE_URL=https://api.themoviedb.org/3
 TMDB_IMAGE_BASE=https://image.tmdb.org/t/p/original
+
+# Admin API 认证 (为空则不启用认证，管理接口对外开放)
+ADMIN_API_KEY=${ADMIN_API_KEY}
+
+# Cache TTL (单位：分钟)
+CACHE_TTL_HERO=360       # Hero Banner 缓存时间，默认 6 小时
+CACHE_TTL_DETAIL=1440    # 详情页缓存时间，默认 24 小时
+CACHE_TTL_CATEGORY=60    # 分类缓存时间，默认 1 小时
+CACHE_TTL_SEARCH=30      # 搜索缓存时间，默认 30 分钟
+CACHE_TTL_DEFAULT=60     # 默认缓存时间，默认 1 小时
 EOF
     print_success "创建 .env 配置文件"
     
@@ -427,25 +448,19 @@ services:
     environment:
       - PORT=8080
       - GIN_MODE=release
-      - MONGODB_URI=mongodb://mongo:27017
-      - MONGODB_DATABASE=douban_api
       - REDIS_URL=redis://redis:6379
       - DOUBAN_API_PROXY=\${DOUBAN_API_PROXY:-}
       - TMDB_API_KEY=\${TMDB_API_KEY:-}
       - TMDB_BASE_URL=\${TMDB_BASE_URL:-https://api.themoviedb.org/3}
       - TMDB_IMAGE_BASE=\${TMDB_IMAGE_BASE:-https://image.tmdb.org/t/p/original}
+      - ADMIN_API_KEY=\${ADMIN_API_KEY:-}
+      - CACHE_TTL_HERO=\${CACHE_TTL_HERO:-360}
+      - CACHE_TTL_DETAIL=\${CACHE_TTL_DETAIL:-1440}
+      - CACHE_TTL_CATEGORY=\${CACHE_TTL_CATEGORY:-60}
+      - CACHE_TTL_SEARCH=\${CACHE_TTL_SEARCH:-30}
+      - CACHE_TTL_DEFAULT=\${CACHE_TTL_DEFAULT:-60}
     depends_on:
-      - mongo
       - redis
-    restart: unless-stopped
-    networks:
-      - douban-network
-
-  mongo:
-    image: mongo:7
-    container_name: douban-mongo
-    volumes:
-      - mongo_data:/data/db
     restart: unless-stopped
     networks:
       - douban-network
@@ -465,7 +480,6 @@ networks:
     driver: bridge
 
 volumes:
-  mongo_data:
   redis_data:
 EOF
     print_success "创建 docker-compose.yml"
