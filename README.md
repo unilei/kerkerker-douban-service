@@ -21,6 +21,7 @@
 - 🔀 **代理轮询** - 支持多代理负载均衡，突破 IP 限制
 - 🎞️ **TMDB 集成** - 获取高质量横向海报
 - 📊 **数据分析** - 内置 API 调用统计和性能监控
+- 🔐 **安全认证** - Admin API Key 保护管理接口
 - 🛠️ **管理面板** - 可视化缓存管理和服务状态监控
 - 🐳 **容器化** - 开箱即用的 Docker 部署方案
 
@@ -137,17 +138,45 @@ DOUBAN_API_PROXY=https://proxy1.example.com,https://proxy2.example.com
 TMDB_API_KEY=your_api_key_1,your_api_key_2
 TMDB_BASE_URL=https://api.themoviedb.org/3
 TMDB_IMAGE_BASE=https://image.tmdb.org/t/p/original
+
+# Admin API 认证 (重要!)
+ADMIN_API_KEY=your_secure_key      # 设置后管理接口需要认证
+
+# 缓存 TTL 配置 (单位：分钟)
+CACHE_TTL_HERO=360                 # Hero Banner 缓存，默认 6 小时
+CACHE_TTL_DETAIL=1440              # 详情页缓存，默认 24 小时
+CACHE_TTL_CATEGORY=60              # 分类缓存，默认 1 小时
+CACHE_TTL_SEARCH=30                # 搜索缓存，默认 30 分钟
+CACHE_TTL_DEFAULT=60               # 默认缓存，默认 1 小时
 ```
 
 ## 🖥️ 管理面板
 
-访问 `http://your-server:8081` 即可打开管理面板：
+访问 `http://your-server:8081/admin` 即可打开管理面板。
+
+### 登录认证
+
+如果配置了 `ADMIN_API_KEY` 环境变量，访问管理面板时需要登录：
+
+1. 打开管理面板会显示登录页面
+2. 输入设置的 `ADMIN_API_KEY` 值
+3. 登录成功后进入仪表盘
+
+> ℹ️ 如果未配置 `ADMIN_API_KEY`，管理接口将对外开放（不推荐用于生产环境）
 
 ### 功能模块
 
 - **📊 数据分析** - API 调用统计、响应时间、缓存命中率
 - **📡 API 端点** - 在线测试所有 API 接口
 - **🗄️ 缓存管理** - 可视化管理各端点缓存
+
+### 管理 API 认证
+
+调用管理 API 时需在请求头中带上认证：
+
+```bash
+curl -H "Authorization: Bearer YOUR_ADMIN_API_KEY" http://localhost:8081/api/v1/analytics
+```
 
 ## 🌐 服务器部署
 
