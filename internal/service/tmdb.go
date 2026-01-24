@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"kerkerker-douban-service/internal/model"
 	"math"
 	"net/http"
 	"net/url"
@@ -251,4 +252,194 @@ func atoi(s string) int {
 		}
 	}
 	return result
+}
+
+// ================== TV 相关方法 ==================
+
+// GetAiringToday 获取今日播出的剧集
+func (s *TMDBService) GetAiringToday(page int, region string) (*model.TMDBTVResponse, error) {
+	apiKey := s.getNextKey()
+	if apiKey == "" {
+		return nil, fmt.Errorf("TMDB API key not configured")
+	}
+
+	searchURL := fmt.Sprintf("%s/tv/airing_today?language=zh-CN&page=%d", s.baseURL, page)
+	if region != "" {
+		searchURL += fmt.Sprintf("&timezone=%s", getTimezone(region))
+	}
+
+	return s.fetchTVList(searchURL, apiKey)
+}
+
+// GetOnTheAir 获取正在播出的剧集
+func (s *TMDBService) GetOnTheAir(page int, region string) (*model.TMDBTVResponse, error) {
+	apiKey := s.getNextKey()
+	if apiKey == "" {
+		return nil, fmt.Errorf("TMDB API key not configured")
+	}
+
+	searchURL := fmt.Sprintf("%s/tv/on_the_air?language=zh-CN&page=%d", s.baseURL, page)
+	if region != "" {
+		searchURL += fmt.Sprintf("&timezone=%s", getTimezone(region))
+	}
+
+	return s.fetchTVList(searchURL, apiKey)
+}
+
+// DiscoverTV 按日期范围发现剧集
+func (s *TMDBService) DiscoverTV(startDate, endDate, region string, page int) (*model.TMDBTVResponse, error) {
+	apiKey := s.getNextKey()
+	if apiKey == "" {
+		return nil, fmt.Errorf("TMDB API key not configured")
+	}
+
+	searchURL := fmt.Sprintf("%s/discover/tv?language=zh-CN&page=%d&sort_by=popularity.desc",
+		s.baseURL, page)
+
+	if startDate != "" {
+		searchURL += fmt.Sprintf("&air_date.gte=%s", startDate)
+	}
+	if endDate != "" {
+		searchURL += fmt.Sprintf("&air_date.lte=%s", endDate)
+	}
+	if region != "" {
+		searchURL += fmt.Sprintf("&with_origin_country=%s", region)
+	}
+
+	return s.fetchTVList(searchURL, apiKey)
+}
+
+// GetTVDetails 获取剧集详情
+func (s *TMDBService) GetTVDetails(tvID int) (*model.TMDBTVDetails, error) {
+	apiKey := s.getNextKey()
+	if apiKey == "" {
+		return nil, fmt.Errorf("TMDB API key not configured")
+	}
+
+	searchURL := fmt.Sprintf("%s/tv/%d?language=zh-CN", s.baseURL, tvID)
+
+	req, err := http.NewRequest("GET", searchURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("TMDB TV details request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("TMDB returned status %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var result model.TMDBTVDetails
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse TMDB TV details: %w", err)
+	}
+
+	return &result, nil
+}
+
+// GetSeasonDetails 获取季度详情（含每集播出日期）
+func (s *TMDBService) GetSeasonDetails(tvID, seasonNumber int) (*model.TMDBSeason, error) {
+	apiKey := s.getNextKey()
+	if apiKey == "" {
+		return nil, fmt.Errorf("TMDB API key not configured")
+	}
+
+	searchURL := fmt.Sprintf("%s/tv/%d/season/%d?language=zh-CN", s.baseURL, tvID, seasonNumber)
+
+	req, err := http.NewRequest("GET", searchURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("TMDB season details request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("TMDB returned status %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var result model.TMDBSeason
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse TMDB season details: %w", err)
+	}
+
+	return &result, nil
+}
+
+// fetchTVList 通用获取 TV 列表方法
+func (s *TMDBService) fetchTVList(url, apiKey string) (*model.TMDBTVResponse, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("TMDB TV list request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("TMDB returned status %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var result model.TMDBTVResponse
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse TMDB TV response: %w", err)
+	}
+
+	return &result, nil
+}
+
+// GetImageURL 获取完整图片 URL
+func (s *TMDBService) GetImageURL(path string) string {
+	if path == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s%s", s.imageBase, path)
+}
+
+// getTimezone 根据地区获取时区
+func getTimezone(region string) string {
+	timezones := map[string]string{
+		"CN": "Asia/Shanghai",
+		"US": "America/New_York",
+		"JP": "Asia/Tokyo",
+		"KR": "Asia/Seoul",
+		"UK": "Europe/London",
+		"TW": "Asia/Taipei",
+		"HK": "Asia/Hong_Kong",
+	}
+	if tz, ok := timezones[strings.ToUpper(region)]; ok {
+		return url.QueryEscape(tz)
+	}
+	return url.QueryEscape("Asia/Shanghai")
 }

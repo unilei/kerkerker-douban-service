@@ -191,3 +191,102 @@ type CachedData struct {
 	CachedAt  time.Time   `json:"cached_at"`
 	ExpiresAt time.Time   `json:"expires_at"`
 }
+
+// ================== 日历相关 ==================
+
+// CalendarEntry 日历条目 - 单集信息
+type CalendarEntry struct {
+	ShowID        int     `json:"show_id"`
+	ShowName      string  `json:"show_name"`
+	ShowNameCN    string  `json:"show_name_cn,omitempty"`
+	SeasonNumber  int     `json:"season_number"`
+	EpisodeNumber int     `json:"episode_number"`
+	EpisodeName   string  `json:"episode_name"`
+	AirDate       string  `json:"air_date"`
+	Poster        string  `json:"poster"`
+	Backdrop      string  `json:"backdrop,omitempty"`
+	Overview      string  `json:"overview,omitempty"`
+	VoteAverage   float64 `json:"vote_average"`
+	DoubanID      string  `json:"douban_id,omitempty"`
+	DoubanRating  string  `json:"douban_rating,omitempty"`
+}
+
+// CalendarDay 日历中的一天
+type CalendarDay struct {
+	Date    string          `json:"date"`
+	Entries []CalendarEntry `json:"entries"`
+}
+
+// CalendarResponse 日历响应
+type CalendarResponse struct {
+	StartDate string        `json:"start_date"`
+	EndDate   string        `json:"end_date"`
+	Days      []CalendarDay `json:"days"`
+	Total     int           `json:"total"`
+}
+
+// ================== TMDB TV 相关 ==================
+
+// TMDBTVShow TMDB 电视剧信息
+type TMDBTVShow struct {
+	ID               int      `json:"id"`
+	Name             string   `json:"name"`
+	OriginalName     string   `json:"original_name"`
+	Overview         string   `json:"overview"`
+	PosterPath       string   `json:"poster_path"`
+	BackdropPath     string   `json:"backdrop_path"`
+	FirstAirDate     string   `json:"first_air_date"`
+	VoteAverage      float64  `json:"vote_average"`
+	Popularity       float64  `json:"popularity"`
+	OriginCountry    []string `json:"origin_country"`
+	OriginalLanguage string   `json:"original_language"`
+}
+
+// TMDBTVResponse TMDB TV 列表响应
+type TMDBTVResponse struct {
+	Page         int          `json:"page"`
+	Results      []TMDBTVShow `json:"results"`
+	TotalPages   int          `json:"total_pages"`
+	TotalResults int          `json:"total_results"`
+}
+
+// TMDBEpisode TMDB 剧集信息
+type TMDBEpisode struct {
+	ID            int     `json:"id"`
+	Name          string  `json:"name"`
+	Overview      string  `json:"overview"`
+	AirDate       string  `json:"air_date"`
+	EpisodeNumber int     `json:"episode_number"`
+	SeasonNumber  int     `json:"season_number"`
+	StillPath     string  `json:"still_path"`
+	VoteAverage   float64 `json:"vote_average"`
+}
+
+// TMDBSeason TMDB 季度信息
+type TMDBSeason struct {
+	ID           int           `json:"id"`
+	Name         string        `json:"name"`
+	Overview     string        `json:"overview"`
+	AirDate      string        `json:"air_date"`
+	SeasonNumber int           `json:"season_number"`
+	PosterPath   string        `json:"poster_path"`
+	Episodes     []TMDBEpisode `json:"episodes"`
+}
+
+// TMDBTVDetails TMDB 剧集详情
+type TMDBTVDetails struct {
+	ID               int          `json:"id"`
+	Name             string       `json:"name"`
+	OriginalName     string       `json:"original_name"`
+	Overview         string       `json:"overview"`
+	PosterPath       string       `json:"poster_path"`
+	BackdropPath     string       `json:"backdrop_path"`
+	FirstAirDate     string       `json:"first_air_date"`
+	LastAirDate      string       `json:"last_air_date"`
+	VoteAverage      float64      `json:"vote_average"`
+	NumberOfSeasons  int          `json:"number_of_seasons"`
+	NumberOfEpisodes int          `json:"number_of_episodes"`
+	Seasons          []TMDBSeason `json:"seasons"`
+	InProduction     bool         `json:"in_production"`
+	Status           string       `json:"status"`
+}

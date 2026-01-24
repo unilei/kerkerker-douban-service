@@ -79,16 +79,18 @@ go run cmd/server/main.go
 
 ### 数据接口
 
-| 端点                 | 方法 | 说明             | 示例                                          |
-| -------------------- | ---- | ---------------- | --------------------------------------------- |
-| `/api/v1/hero`       | GET  | Hero Banner 数据 | `/api/v1/hero`                                |
-| `/api/v1/latest`     | GET  | 最新内容         | `/api/v1/latest`                              |
-| `/api/v1/movies`     | GET  | 电影分类         | `/api/v1/movies`                              |
-| `/api/v1/tv`         | GET  | 电视剧分类       | `/api/v1/tv`                                  |
-| `/api/v1/new`        | GET  | 新上线筛选       | `/api/v1/new`                                 |
-| `/api/v1/category`   | GET  | 分类分页         | `/api/v1/category?category=hot_movies&page=1` |
-| `/api/v1/detail/:id` | GET  | 影片详情         | `/api/v1/detail/1291546`                      |
-| `/api/v1/search`     | GET  | 搜索影片         | `/api/v1/search?q=流浪地球`                   |
+| 端点                      | 方法 | 说明             | 示例                                          |
+| ------------------------- | ---- | ---------------- | --------------------------------------------- |
+| `/api/v1/hero`            | GET  | Hero Banner 数据 | `/api/v1/hero`                                |
+| `/api/v1/latest`          | GET  | 最新内容         | `/api/v1/latest`                              |
+| `/api/v1/movies`          | GET  | 电影分类         | `/api/v1/movies`                              |
+| `/api/v1/tv`              | GET  | 电视剧分类       | `/api/v1/tv`                                  |
+| `/api/v1/new`             | GET  | 新上线筛选       | `/api/v1/new`                                 |
+| `/api/v1/category`        | GET  | 分类分页         | `/api/v1/category?category=hot_movies&page=1` |
+| `/api/v1/detail/:id`      | GET  | 影片详情         | `/api/v1/detail/1291546`                      |
+| `/api/v1/search`          | GET  | 搜索影片         | `/api/v1/search?q=流浪地球`                   |
+| `/api/v1/calendar`        | GET  | 追剧日历         | `/api/v1/calendar?start_date=2026-01-09`      |
+| `/api/v1/calendar/airing` | GET  | 今日热播         | `/api/v1/calendar/airing?region=CN`           |
 
 ### 管理接口
 

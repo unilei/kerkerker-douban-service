@@ -75,6 +75,7 @@ func main() {
 	newHandler := handler.NewNewHandler(doubanService, cache)
 	searchHandler := handler.NewSearchHandler(doubanService, cache)
 	adminHandler := handler.NewAdminHandler(doubanService, tmdbService, metrics)
+	calendarHandler := handler.NewCalendarHandler(tmdbService, doubanService, cache, cfg.CacheTTLCategory)
 
 	// Setup router
 	r := gin.New()
@@ -110,6 +111,10 @@ func main() {
 		api.GET("/new", newHandler.GetNew)
 		api.GET("/search", searchHandler.Search)
 		api.POST("/search", searchHandler.GetSearchTags)
+
+		// 日历接口
+		api.GET("/calendar", calendarHandler.GetCalendar)
+		api.GET("/calendar/airing", calendarHandler.GetAiring)
 	}
 
 	// Admin routes - 需要认证（如果配置了 ADMIN_API_KEY）
@@ -131,6 +136,7 @@ func main() {
 		admin.DELETE("/tv", tvHandler.DeleteTVCache)
 		admin.DELETE("/new", newHandler.DeleteNewCache)
 		admin.DELETE("/search", searchHandler.DeleteSearchCache)
+		admin.DELETE("/calendar", calendarHandler.DeleteCalendarCache)
 	}
 
 	// 日志输出认证状态
