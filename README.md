@@ -182,29 +182,114 @@ curl -H "Authorization: Bearer YOUR_ADMIN_API_KEY" http://localhost:8081/api/v1/
 
 ## 🌐 服务器部署
 
-### 一键部署
+### 第一步：本地构建并推送镜像
+
+在本地开发机器上执行：
+
+```bash
+# 进入项目目录
+cd kerkerker-douban-service
+
+# 构建并推送镜像到 Docker Hub
+./scripts/docker-push.sh -u YOUR_DOCKER_USERNAME VERSION
+
+# 示例
+./scripts/docker-push.sh -u unilei 1.0.0
+./scripts/docker-push.sh -u unilei latest
+```
+
+**脚本功能：**
+
+- 自动检查 Docker 登录状态
+- 支持多平台构建 (amd64/arm64)
+- 同时推送指定版本和 latest 标签
+
+---
+
+### 第二步：服务器端部署
+
+#### 方式 A：一键安装（推荐）
 
 ```bash
 # 使用 curl
 curl -fsSL https://raw.githubusercontent.com/unilei/kerkerker-douban-service/refs/heads/master/scripts/install.sh | bash
-
-# 使用 wget
-wget -qO- https://raw.githubusercontent.com/你的用户名/kerkerker-douban-service/main/scripts/install.sh | bash
 ```
+
+#### 方式 B：Docker Compose 手动部署
+
+```bash
+# 1. 克隆项目
+git clone https://github.com/unilei/kerkerker-douban-service.git
+cd kerkerker-douban-service
+
+# 2. 创建配置文件
+cp .env.example .env
+nano .env  # 编辑必要的环境变量
+
+# 3. 启动服务
+docker-compose up -d
+
+# 4. 验证部署
+curl http://localhost:8080/health
+```
+
+---
+
+### 第三步：更新已部署的服务
+
+#### 使用管理命令（一键安装后可用）
+
+```bash
+douban-service update
+```
+
+#### 手动更新
+
+```bash
+# 拉取最新镜像
+docker pull YOUR_USERNAME/kerkerker-douban-service:latest
+
+# 重启服务
+docker-compose down
+docker-compose up -d
+
+# 清理旧镜像
+docker image prune -f
+```
+
+---
 
 ### 管理命令
 
 部署完成后，使用以下命令管理服务：
 
+| 命令                       | 功能           |
+| -------------------------- | -------------- |
+| `douban-service start`     | 启动服务       |
+| `douban-service stop`      | 停止服务       |
+| `douban-service restart`   | 重启服务       |
+| `douban-service logs`      | 查看日志       |
+| `douban-service status`    | 查看状态       |
+| `douban-service update`    | 更新到最新版本 |
+| `douban-service config`    | 编辑配置       |
+| `douban-service uninstall` | 卸载服务       |
+
+---
+
+### 故障排查
+
 ```bash
-douban-service start     # 启动服务
-douban-service stop      # 停止服务
-douban-service restart   # 重启服务
-douban-service logs      # 查看日志
-douban-service status    # 查看状态
-douban-service update    # 更新到最新版本
-douban-service config    # 编辑配置
-douban-service uninstall # 卸载服务
+# 查看容器日志
+docker-compose logs -f douban-api
+
+# 检查容器状态
+docker-compose ps
+
+# 检查端口占用
+lsof -i :8080
+
+# 查看 Redis 状态
+docker-compose logs redis
 ```
 
 ## 📁 项目结构
@@ -258,7 +343,7 @@ NEXT_PUBLIC_DOUBAN_API_URL=http://your-server:8081
 
 ```typescript
 const response = await fetch(
-  `${process.env.NEXT_PUBLIC_DOUBAN_API_URL}/api/v1/hero`
+  `${process.env.NEXT_PUBLIC_DOUBAN_API_URL}/api/v1/hero`,
 );
 const data = await response.json();
 ```
