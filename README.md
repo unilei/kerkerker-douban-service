@@ -144,7 +144,7 @@ TMDB_IMAGE_BASE=https://image.tmdb.org/t/p/original
 
 # Cloudflare R2 图片同步
 # 推荐：通过鉴权 Upload Worker 上传
-CLOUDFLARE_R2_PUBLIC_URL=https://pub-example.r2.dev
+CLOUDFLARE_R2_PUBLIC_URL=https://douban-images.example.com
 CLOUDFLARE_R2_UPLOAD_API_URL=https://example-upload.workers.dev/objects
 CLOUDFLARE_R2_UPLOAD_API_TOKEN=your_upload_token
 CLOUDFLARE_R2_KEY_PREFIX=douban-images
@@ -169,7 +169,7 @@ CACHE_TTL_SEARCH=30                # 搜索缓存，默认 30 分钟
 CACHE_TTL_DEFAULT=60               # 默认缓存，默认 1 小时
 ```
 
-R2 配置完整后，服务会在公开接口返回前将豆瓣域名图片上传到 R2，并把缓存和响应中的图片地址改为 `CLOUDFLARE_R2_PUBLIC_URL`。上传失败时保留原豆瓣图片地址，不会阻断数据接口。`CLOUDFLARE_R2_PUBLIC_URL` 必须指向 Bucket 根目录的公开域名。
+R2 配置完整后，服务会在公开接口返回前将豆瓣域名图片上传到 R2，并把缓存和响应中的图片地址改为 `CLOUDFLARE_R2_PUBLIC_URL`。上传失败时保留原豆瓣图片地址，不会阻断数据接口。`CLOUDFLARE_R2_PUBLIC_URL` 必须指向 Bucket 根目录的公开域名，生产环境推荐绑定 Cloudflare R2 自定义域名，不使用 `r2.dev` 开发地址。
 
 推荐部署 `cloudflare/image-upload-worker`，将它绑定到目标 Bucket，并通过 `wrangler secret put UPLOAD_TOKEN` 设置上传密钥。服务只需要公开 R2 URL、Worker `/objects` 地址和密钥；若不使用 Worker，也可以配置完整的 R2 S3 API 凭证直接上传。
 
