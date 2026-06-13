@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -17,6 +18,9 @@ type Config struct {
 	TMDBBaseURL   string
 	TMDBImageBase string
 
+	// Cloudflare R2 image sync
+	R2Images R2ImageConfig
+
 	// 缓存 TTL 配置（差异化）
 	CacheTTLHero     time.Duration // Hero Banner 缓存时间
 	CacheTTLDetail   time.Duration // 详情页缓存时间
@@ -26,6 +30,20 @@ type Config struct {
 
 	// Admin API 认证
 	AdminAPIKey string // 为空则不启用认证
+}
+
+// R2ImageConfig holds Cloudflare R2 settings for Douban image mirroring.
+type R2ImageConfig struct {
+	Enabled         bool
+	Endpoint        string
+	AccessKeyID     string
+	SecretAccessKey string
+	Bucket          string
+	PublicBaseURL   string
+	UploadAPIURL    string
+	UploadAPIToken  string
+	KeyPrefix       string
+	MaxImageBytes   int64
 }
 
 // Load reads configuration from environment variables
@@ -57,6 +75,7 @@ func Load() *Config {
 		TMDBAPIKeys:   tmdbKeys,
 		TMDBBaseURL:   getEnv("TMDB_BASE_URL", "https://api.themoviedb.org/3"),
 		TMDBImageBase: getEnv("TMDB_IMAGE_BASE", "https://image.tmdb.org/t/p/original"),
+		R2Images:      loadR2ImageConfig(),
 
 		// 缓存 TTL（可通过环境变量覆盖，单位：分钟）
 		CacheTTLHero:     getDurationMinutes("CACHE_TTL_HERO", 360),    // 6 小时
@@ -70,11 +89,50 @@ func Load() *Config {
 	}
 }
 
+func loadR2ImageConfig() R2ImageConfig {
+	endpoint := getEnvAny("CLOUDFLARE_R2_ENDPOINT", "R2_ENDPOINT")
+	if endpoint == "" {
+		if accountID := getEnvAny("CLOUDFLARE_R2_ACCOUNT_ID", "R2_ACCOUNT_ID"); accountID != "" {
+			endpoint = fmt.Sprintf("https://%s.r2.cloudflarestorage.com", accountID)
+		}
+	}
+
+	cfg := R2ImageConfig{
+		Endpoint:        strings.TrimSpace(endpoint),
+		AccessKeyID:     strings.TrimSpace(getEnvAny("CLOUDFLARE_R2_ACCESS_KEY_ID", "R2_ACCESS_KEY_ID")),
+		SecretAccessKey: strings.TrimSpace(getEnvAny("CLOUDFLARE_R2_SECRET_ACCESS_KEY", "R2_SECRET_ACCESS_KEY")),
+		Bucket:          strings.TrimSpace(getEnvAny("CLOUDFLARE_R2_BUCKET", "R2_BUCKET")),
+		PublicBaseURL:   strings.TrimRight(strings.TrimSpace(getEnvAny("CLOUDFLARE_R2_PUBLIC_URL", "R2_PUBLIC_URL")), "/"),
+		UploadAPIURL:    strings.TrimRight(strings.TrimSpace(getEnv("CLOUDFLARE_R2_UPLOAD_API_URL", "")), "/"),
+		UploadAPIToken:  strings.TrimSpace(getEnv("CLOUDFLARE_R2_UPLOAD_API_TOKEN", "")),
+		KeyPrefix:       strings.Trim(strings.TrimSpace(getEnv("CLOUDFLARE_R2_KEY_PREFIX", "douban-images")), "/"),
+		MaxImageBytes:   getInt64("CLOUDFLARE_R2_MAX_IMAGE_BYTES", 10*1024*1024),
+	}
+
+	hasDirectR2 := cfg.Endpoint != "" &&
+		cfg.AccessKeyID != "" &&
+		cfg.SecretAccessKey != "" &&
+		cfg.Bucket != ""
+	hasUploadWorker := cfg.UploadAPIURL != "" && cfg.UploadAPIToken != ""
+	cfg.Enabled = cfg.PublicBaseURL != "" && (hasDirectR2 || hasUploadWorker)
+
+	return cfg
+}
+
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
 	}
 	return defaultValue
+}
+
+func getEnvAny(keys ...string) string {
+	for _, key := range keys {
+		if value := os.Getenv(key); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func getDurationMinutes(key string, defaultMinutes int) time.Duration {
@@ -84,4 +142,13 @@ func getDurationMinutes(key string, defaultMinutes int) time.Duration {
 		}
 	}
 	return time.Duration(defaultMinutes) * time.Minute
+}
+
+func getInt64(key string, defaultValue int64) int64 {
+	if value := os.Getenv(key); value != "" {
+		if parsed, err := strconv.ParseInt(value, 10, 64); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return defaultValue
 }

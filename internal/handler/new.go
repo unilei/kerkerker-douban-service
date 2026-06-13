@@ -67,6 +67,10 @@ func (h *NewHandler) GetNew(c *gin.Context) {
 	// Check cache
 	var cachedData []model.CategoryData
 	if err := h.cache.Get(ctx, cacheKey, &cachedData); err == nil {
+		cachedData = h.doubanService.SyncCategoryDataImages(ctx, cachedData)
+		if h.doubanService.ImageSyncEnabled() {
+			h.cache.SetKeepTTL(ctx, cacheKey, cachedData)
+		}
 		c.Set("cache_source", "redis-cache") // 标记缓存命中供 metrics 追踪
 		c.JSON(http.StatusOK, gin.H{
 			"code":    200,
@@ -89,6 +93,7 @@ func (h *NewHandler) GetNew(c *gin.Context) {
 	if hasFilters {
 		// With filters - use tag search
 		subjects, total, hasMore := h.fetchWithTagSearch(typ, year, region, genre, sort, page, pageSize)
+		subjects = h.doubanService.SyncSubjectImages(ctx, subjects)
 
 		resultData = []model.CategoryData{{
 			Name: buildCategoryName(typ, year, region, genre),
@@ -149,6 +154,7 @@ func (h *NewHandler) GetNew(c *gin.Context) {
 
 	wg.Wait()
 	resultData = results
+	resultData = h.doubanService.SyncCategoryDataImages(ctx, resultData)
 
 	// Cache result
 	h.cache.Set(ctx, cacheKey, resultData)

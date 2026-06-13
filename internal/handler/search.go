@@ -57,6 +57,10 @@ func (h *SearchHandler) Search(c *gin.Context) {
 	// Check cache
 	var cachedData model.SearchResult
 	if err := h.cache.Get(ctx, cacheKey, &cachedData); err == nil {
+		cachedData = h.doubanService.SyncSearchResultImages(ctx, cachedData)
+		if h.doubanService.ImageSyncEnabled() {
+			h.cache.SetKeepTTL(ctx, cacheKey, cachedData)
+		}
 		c.Set("cache_source", "redis-cache") // 标记缓存命中供 metrics 追踪
 		c.JSON(http.StatusOK, model.APIResponse{
 			Code:   200,
@@ -111,6 +115,7 @@ func (h *SearchHandler) Search(c *gin.Context) {
 		Suggest:  suggestResult,
 		Advanced: advancedResult,
 	}
+	result = h.doubanService.SyncSearchResultImages(ctx, result)
 
 	// Cache result
 	h.cache.Set(ctx, cacheKey, result)

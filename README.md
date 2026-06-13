@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Go Version](https://img.shields.io/badge/Go-1.23-00ADD8?style=flat-square&logo=go)
+![Go Version](https://img.shields.io/badge/Go-1.24-00ADD8?style=flat-square&logo=go)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
 ![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker)
 
@@ -19,6 +19,7 @@
 - 🚀 **高性能** - Go + Gin 框架，响应速度快
 - 💾 **多级缓存** - Redis 缓存层，减少 API 调用
 - 🔀 **代理轮询** - 支持多代理负载均衡，突破 IP 限制
+- ☁️ **R2 图片镜像** - 自动同步豆瓣图片到 Cloudflare R2，后续直接返回 CDN URL
 - 🎞️ **TMDB 集成** - 获取高质量横向海报
 - 📊 **数据分析** - 内置 API 调用统计和性能监控
 - 🔐 **安全认证** - Admin API Key 保护管理接口
@@ -29,7 +30,7 @@
 
 | 组件     | 技术                    |
 | -------- | ----------------------- |
-| 后端框架 | Go 1.23 + Gin           |
+| 后端框架 | Go 1.24 + Gin           |
 | 缓存     | Redis 7                 |
 | 数据库   | MongoDB 7 (可选)        |
 | 容器化   | Docker + Docker Compose |
@@ -141,6 +142,22 @@ TMDB_API_KEY=your_api_key_1,your_api_key_2
 TMDB_BASE_URL=https://api.themoviedb.org/3
 TMDB_IMAGE_BASE=https://image.tmdb.org/t/p/original
 
+# Cloudflare R2 图片同步
+# 推荐：通过鉴权 Upload Worker 上传
+CLOUDFLARE_R2_PUBLIC_URL=https://pub-example.r2.dev
+CLOUDFLARE_R2_UPLOAD_API_URL=https://example-upload.workers.dev/objects
+CLOUDFLARE_R2_UPLOAD_API_TOKEN=your_upload_token
+CLOUDFLARE_R2_KEY_PREFIX=douban-images
+CLOUDFLARE_R2_MAX_IMAGE_BYTES=10485760
+
+# 可选替代方案：直接使用 R2 S3 API 上传
+# 可使用 ACCOUNT_ID 自动生成 Endpoint，也可以直接配置 CLOUDFLARE_R2_ENDPOINT
+CLOUDFLARE_R2_ACCOUNT_ID=your_account_id
+CLOUDFLARE_R2_ENDPOINT=
+CLOUDFLARE_R2_ACCESS_KEY_ID=your_access_key_id
+CLOUDFLARE_R2_SECRET_ACCESS_KEY=your_secret_access_key
+CLOUDFLARE_R2_BUCKET=douban-images
+
 # Admin API 认证 (重要!)
 ADMIN_API_KEY=your_secure_key      # 设置后管理接口需要认证
 
@@ -151,6 +168,10 @@ CACHE_TTL_CATEGORY=60              # 分类缓存，默认 1 小时
 CACHE_TTL_SEARCH=30                # 搜索缓存，默认 30 分钟
 CACHE_TTL_DEFAULT=60               # 默认缓存，默认 1 小时
 ```
+
+R2 配置完整后，服务会在公开接口返回前将豆瓣域名图片上传到 R2，并把缓存和响应中的图片地址改为 `CLOUDFLARE_R2_PUBLIC_URL`。上传失败时保留原豆瓣图片地址，不会阻断数据接口。`CLOUDFLARE_R2_PUBLIC_URL` 必须指向 Bucket 根目录的公开域名。
+
+推荐部署 `cloudflare/image-upload-worker`，将它绑定到目标 Bucket，并通过 `wrangler secret put UPLOAD_TOKEN` 设置上传密钥。服务只需要公开 R2 URL、Worker `/objects` 地址和密钥；若不使用 Worker，也可以配置完整的 R2 S3 API 凭证直接上传。
 
 ## 🖥️ 管理面板
 
@@ -182,27 +203,20 @@ curl -H "Authorization: Bearer YOUR_ADMIN_API_KEY" http://localhost:8081/api/v1/
 
 ## 🌐 服务器部署
 
-### 第一步：本地构建并推送镜像
+### 第一步：发布镜像
 
-在本地开发机器上执行：
+推送到 `master` 后，GitHub Actions 会自动构建 amd64/arm64 镜像并发布到 GHCR：
 
 ```bash
-# 进入项目目录
-cd kerkerker-douban-service
-
-# 构建并推送镜像到 Docker Hub
-./scripts/docker-push.sh -u YOUR_DOCKER_USERNAME VERSION
-
-# 示例
-./scripts/docker-push.sh -u unilei 1.0.0
-./scripts/docker-push.sh -u unilei latest
+docker pull ghcr.io/unilei/kerkerker-douban-service:latest
 ```
 
-**脚本功能：**
+也可以使用 GitHub Personal Access Token 手动发布：
 
-- 自动检查 Docker 登录状态
-- 支持多平台构建 (amd64/arm64)
-- 同时推送指定版本和 latest 标签
+```bash
+export GITHUB_TOKEN=YOUR_GITHUB_TOKEN
+./scripts/docker-push.sh 1.0.0
+```
 
 ---
 
@@ -247,7 +261,7 @@ douban-service update
 
 ```bash
 # 拉取最新镜像
-docker pull YOUR_USERNAME/kerkerker-douban-service:latest
+docker pull ghcr.io/unilei/kerkerker-douban-service:latest
 
 # 重启服务
 docker-compose down
@@ -353,14 +367,17 @@ const data = await response.json();
 ### 拉取镜像
 
 ```bash
-docker pull 你的用户名/kerkerker-douban-service:latest
+docker pull ghcr.io/unilei/kerkerker-douban-service:latest
 ```
 
 ### 推送镜像
 
 ```bash
-# 使用推送脚本
-./scripts/docker-push.sh -u 你的用户名 1.0.0
+# 推荐：推送到 master，由 GitHub Actions 自动发布
+git push origin master
+
+# 手动发布（需要 GITHUB_TOKEN）
+GITHUB_TOKEN=YOUR_GITHUB_TOKEN ./scripts/docker-push.sh 1.0.0
 ```
 
 ## 📄 License

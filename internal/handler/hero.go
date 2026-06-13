@@ -48,6 +48,10 @@ func (h *HeroHandler) GetHero(c *gin.Context) {
 	// Check cache
 	var cachedData []model.HeroMovie
 	if err := h.cache.Get(ctx, heroDataCacheKey, &cachedData); err == nil {
+		cachedData = h.doubanService.SyncHeroImages(ctx, cachedData)
+		if h.doubanService.ImageSyncEnabled() {
+			h.cache.SetKeepTTL(ctx, heroDataCacheKey, cachedData)
+		}
 		c.Set("cache_source", "redis-cache") // 标记缓存命中供 metrics 追踪
 		c.JSON(http.StatusOK, model.APIResponse{
 			Code:   200,
@@ -195,6 +199,7 @@ func (h *HeroHandler) GetHero(c *gin.Context) {
 			heroMovies = append(heroMovies, *hero)
 		}
 	}
+	heroMovies = h.doubanService.SyncHeroImages(ctx, heroMovies)
 
 	// Cache the result
 	if len(heroMovies) > 0 {

@@ -1,8 +1,7 @@
-version: '3.8'
-
 services:
   douban-api:
     build: .
+    image: ghcr.io/unilei/kerkerker-douban-service:latest
     container_name: kerkerker-douban-service
     ports:
       - "8081:8080"
@@ -14,6 +13,16 @@ services:
       - TMDB_API_KEY=${TMDB_API_KEY:-}
       - TMDB_BASE_URL=${TMDB_BASE_URL:-https://api.themoviedb.org/3}
       - TMDB_IMAGE_BASE=${TMDB_IMAGE_BASE:-https://image.tmdb.org/t/p/original}
+      - CLOUDFLARE_R2_ACCOUNT_ID=${CLOUDFLARE_R2_ACCOUNT_ID:-}
+      - CLOUDFLARE_R2_ENDPOINT=${CLOUDFLARE_R2_ENDPOINT:-}
+      - CLOUDFLARE_R2_ACCESS_KEY_ID=${CLOUDFLARE_R2_ACCESS_KEY_ID:-}
+      - CLOUDFLARE_R2_SECRET_ACCESS_KEY=${CLOUDFLARE_R2_SECRET_ACCESS_KEY:-}
+      - CLOUDFLARE_R2_BUCKET=${CLOUDFLARE_R2_BUCKET:-}
+      - CLOUDFLARE_R2_PUBLIC_URL=${CLOUDFLARE_R2_PUBLIC_URL:-}
+      - CLOUDFLARE_R2_UPLOAD_API_URL=${CLOUDFLARE_R2_UPLOAD_API_URL:-}
+      - CLOUDFLARE_R2_UPLOAD_API_TOKEN=${CLOUDFLARE_R2_UPLOAD_API_TOKEN:-}
+      - CLOUDFLARE_R2_KEY_PREFIX=${CLOUDFLARE_R2_KEY_PREFIX:-douban-images}
+      - CLOUDFLARE_R2_MAX_IMAGE_BYTES=${CLOUDFLARE_R2_MAX_IMAGE_BYTES:-10485760}
       - ADMIN_API_KEY=${ADMIN_API_KEY:-}
     depends_on:
       - redis

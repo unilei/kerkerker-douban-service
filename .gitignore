@@ -44,3 +44,4 @@ logs/
 # Temporary files
 tmp/
 temp/
+.wrangler/

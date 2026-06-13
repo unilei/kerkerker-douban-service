@@ -37,6 +37,10 @@ func (h *MoviesHandler) GetMovies(c *gin.Context) {
 	// Check cache
 	var cachedData []model.CategoryData
 	if err := h.cache.Get(ctx, moviesCacheKey, &cachedData); err == nil {
+		cachedData = h.doubanService.SyncCategoryDataImages(ctx, cachedData)
+		if h.doubanService.ImageSyncEnabled() {
+			h.cache.SetKeepTTL(ctx, moviesCacheKey, cachedData)
+		}
 		c.Set("cache_source", "redis-cache") // 标记缓存命中供 metrics 追踪
 		c.JSON(http.StatusOK, model.APIResponse{
 			Code:   200,
@@ -81,6 +85,7 @@ func (h *MoviesHandler) GetMovies(c *gin.Context) {
 	}
 
 	wg.Wait()
+	results = h.doubanService.SyncCategoryDataImages(ctx, results)
 
 	// Cache result (1 hour)
 	h.cache.Set(ctx, moviesCacheKey, results)

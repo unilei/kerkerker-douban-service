@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -13,14 +14,19 @@ import (
 
 // DoubanService handles Douban API interactions
 type DoubanService struct {
-	client *httpclient.Client
+	client      *httpclient.Client
+	imageSyncer *ImageSyncer
 }
 
 // NewDoubanService creates a new DoubanService
-func NewDoubanService(client *httpclient.Client) *DoubanService {
-	return &DoubanService{
+func NewDoubanService(client *httpclient.Client, imageSyncers ...*ImageSyncer) *DoubanService {
+	service := &DoubanService{
 		client: client,
 	}
+	if len(imageSyncers) > 0 {
+		service.imageSyncer = imageSyncers[0]
+	}
+	return service
 }
 
 // SearchSubjects searches for subjects by tag
@@ -235,4 +241,49 @@ func (s *DoubanService) HasProxy() bool {
 // ProxyCount returns the number of configured proxies
 func (s *DoubanService) ProxyCount() int {
 	return s.client.ProxyCount()
+}
+
+// ImageSyncEnabled returns true when Douban images will be mirrored to R2.
+func (s *DoubanService) ImageSyncEnabled() bool {
+	return s != nil && s.imageSyncer != nil && s.imageSyncer.Enabled()
+}
+
+// SyncSubjectImages rewrites Subject image fields to R2 URLs when enabled.
+func (s *DoubanService) SyncSubjectImages(ctx context.Context, subjects []model.Subject) []model.Subject {
+	if !s.ImageSyncEnabled() {
+		return subjects
+	}
+	return s.imageSyncer.SyncSubjectImages(ctx, subjects)
+}
+
+// SyncCategoryDataImages rewrites category data image fields to R2 URLs when enabled.
+func (s *DoubanService) SyncCategoryDataImages(ctx context.Context, categories []model.CategoryData) []model.CategoryData {
+	if !s.ImageSyncEnabled() {
+		return categories
+	}
+	return s.imageSyncer.SyncCategoryDataImages(ctx, categories)
+}
+
+// SyncSearchResultImages rewrites search result image fields to R2 URLs when enabled.
+func (s *DoubanService) SyncSearchResultImages(ctx context.Context, result model.SearchResult) model.SearchResult {
+	if !s.ImageSyncEnabled() {
+		return result
+	}
+	return s.imageSyncer.SyncSearchResultImages(ctx, result)
+}
+
+// SyncSubjectDetailImages rewrites detail image fields to R2 URLs when enabled.
+func (s *DoubanService) SyncSubjectDetailImages(ctx context.Context, detail model.SubjectDetail) model.SubjectDetail {
+	if !s.ImageSyncEnabled() {
+		return detail
+	}
+	return s.imageSyncer.SyncSubjectDetailImages(ctx, detail)
+}
+
+// SyncHeroImages rewrites hero image fields to R2 URLs when enabled.
+func (s *DoubanService) SyncHeroImages(ctx context.Context, heroes []model.HeroMovie) []model.HeroMovie {
+	if !s.ImageSyncEnabled() {
+		return heroes
+	}
+	return s.imageSyncer.SyncHeroImages(ctx, heroes)
 }

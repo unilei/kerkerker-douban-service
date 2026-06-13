@@ -48,6 +48,10 @@ func (h *DetailHandler) GetDetail(c *gin.Context) {
 	// Check cache
 	var cachedData model.SubjectDetail
 	if err := h.cache.Get(ctx, cacheKey, &cachedData); err == nil {
+		cachedData = h.doubanService.SyncSubjectDetailImages(ctx, cachedData)
+		if h.doubanService.ImageSyncEnabled() {
+			h.cache.SetKeepTTL(ctx, cacheKey, cachedData)
+		}
 		c.Set("cache_source", "redis-cache") // 标记缓存命中供 metrics 追踪
 		c.JSON(http.StatusOK, buildDetailResponse(cachedData, "redis-cache"))
 		return
@@ -143,6 +147,7 @@ func (h *DetailHandler) GetDetail(c *gin.Context) {
 		Comments:        comments,
 		Recommendations: recommendations,
 	}
+	detailData = h.doubanService.SyncSubjectDetailImages(ctx, detailData)
 
 	// Cache result
 	h.cache.Set(ctx, cacheKey, detailData)

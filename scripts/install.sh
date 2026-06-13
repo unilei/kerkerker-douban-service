@@ -80,7 +80,7 @@ else
 fi
 
 # ==================== 配置 ====================
-DOCKER_IMAGE="${DOCKER_IMAGE:-unilei/kerkerker-douban-service}"
+DOCKER_IMAGE="${DOCKER_IMAGE:-ghcr.io/unilei/kerkerker-douban-service}"
 DEFAULT_PORT="8081"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/kerkerker-douban-service}"
 
@@ -357,6 +357,18 @@ interactive_config() {
     print_info "多个 API Key 用逗号分隔，将启用轮询负载均衡"
     TMDB_KEY=$(read_input "TMDB API Key (可选)" "")
     
+    # Cloudflare R2
+    echo ""
+    print_info "Cloudflare R2 用于镜像豆瓣图片，减少后续图片代理请求"
+    print_info "推荐使用鉴权 Upload Worker；也支持直接使用 R2 S3 API"
+    R2_PUBLIC_URL=$(read_input "Cloudflare R2 公开 URL (可选)" "")
+    R2_UPLOAD_API_URL=$(read_input "R2 Upload Worker /objects URL (可选)" "")
+    R2_UPLOAD_API_TOKEN=$(read_input "R2 Upload Worker Token (可选)" "" "true")
+    R2_ACCOUNT_ID=$(read_input "Cloudflare R2 Account ID (可选)" "")
+    R2_ACCESS_KEY_ID=$(read_input "Cloudflare R2 Access Key ID (可选)" "")
+    R2_SECRET_ACCESS_KEY=$(read_input "Cloudflare R2 Secret Access Key (可选)" "" "true")
+    R2_BUCKET=$(read_input "Cloudflare R2 Bucket (可选)" "")
+
     # Admin API Key
     echo ""
     print_info "Admin API Key 用于保护管理接口 (缓存管理、统计重置等)"
@@ -375,6 +387,11 @@ interactive_config() {
     fi
     if [ -n "$TMDB_KEY" ]; then
         printf "   %bTMDB API:%b       已设置\n" "${BOLD}" "${NC}"
+    fi
+    if [ -n "$R2_PUBLIC_URL" ] && { { [ -n "$R2_UPLOAD_API_URL" ] && [ -n "$R2_UPLOAD_API_TOKEN" ]; } || { [ -n "$R2_ACCOUNT_ID" ] && [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACCESS_KEY" ] && [ -n "$R2_BUCKET" ]; }; }; then
+        printf "   %bR2 图片同步:%b    已设置\n" "${BOLD}" "${NC}"
+    else
+        printf "   %bR2 图片同步:%b    未启用\n" "${YELLOW}" "${NC}"
     fi
     if [ -n "$ADMIN_API_KEY" ]; then
         printf "   %bAdmin API:%b      已设置 (管理接口受保护)\n" "${BOLD}" "${NC}"
@@ -422,6 +439,18 @@ TMDB_API_KEY=${TMDB_KEY}
 TMDB_BASE_URL=https://api.themoviedb.org/3
 TMDB_IMAGE_BASE=https://image.tmdb.org/t/p/original
 
+# Cloudflare R2 图片同步
+CLOUDFLARE_R2_ACCOUNT_ID=${R2_ACCOUNT_ID}
+CLOUDFLARE_R2_ENDPOINT=
+CLOUDFLARE_R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
+CLOUDFLARE_R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
+CLOUDFLARE_R2_BUCKET=${R2_BUCKET}
+CLOUDFLARE_R2_PUBLIC_URL=${R2_PUBLIC_URL}
+CLOUDFLARE_R2_UPLOAD_API_URL=${R2_UPLOAD_API_URL}
+CLOUDFLARE_R2_UPLOAD_API_TOKEN=${R2_UPLOAD_API_TOKEN}
+CLOUDFLARE_R2_KEY_PREFIX=douban-images
+CLOUDFLARE_R2_MAX_IMAGE_BYTES=10485760
+
 # Admin API 认证 (为空则不启用认证，管理接口对外开放)
 ADMIN_API_KEY=${ADMIN_API_KEY}
 
@@ -453,6 +482,16 @@ services:
       - TMDB_API_KEY=\${TMDB_API_KEY:-}
       - TMDB_BASE_URL=\${TMDB_BASE_URL:-https://api.themoviedb.org/3}
       - TMDB_IMAGE_BASE=\${TMDB_IMAGE_BASE:-https://image.tmdb.org/t/p/original}
+      - CLOUDFLARE_R2_ACCOUNT_ID=\${CLOUDFLARE_R2_ACCOUNT_ID:-}
+      - CLOUDFLARE_R2_ENDPOINT=\${CLOUDFLARE_R2_ENDPOINT:-}
+      - CLOUDFLARE_R2_ACCESS_KEY_ID=\${CLOUDFLARE_R2_ACCESS_KEY_ID:-}
+      - CLOUDFLARE_R2_SECRET_ACCESS_KEY=\${CLOUDFLARE_R2_SECRET_ACCESS_KEY:-}
+      - CLOUDFLARE_R2_BUCKET=\${CLOUDFLARE_R2_BUCKET:-}
+      - CLOUDFLARE_R2_PUBLIC_URL=\${CLOUDFLARE_R2_PUBLIC_URL:-}
+      - CLOUDFLARE_R2_UPLOAD_API_URL=\${CLOUDFLARE_R2_UPLOAD_API_URL:-}
+      - CLOUDFLARE_R2_UPLOAD_API_TOKEN=\${CLOUDFLARE_R2_UPLOAD_API_TOKEN:-}
+      - CLOUDFLARE_R2_KEY_PREFIX=\${CLOUDFLARE_R2_KEY_PREFIX:-douban-images}
+      - CLOUDFLARE_R2_MAX_IMAGE_BYTES=\${CLOUDFLARE_R2_MAX_IMAGE_BYTES:-10485760}
       - ADMIN_API_KEY=\${ADMIN_API_KEY:-}
       - CACHE_TTL_HERO=\${CACHE_TTL_HERO:-360}
       - CACHE_TTL_DETAIL=\${CACHE_TTL_DETAIL:-1440}

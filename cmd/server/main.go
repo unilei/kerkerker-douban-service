@@ -59,7 +59,42 @@ func main() {
 	}
 
 	// Initialize services
-	doubanService := service.NewDoubanService(httpClient)
+	var imageSyncer *service.ImageSyncer
+	if cfg.R2Images.Enabled {
+		var objectStore service.ObjectStore
+		uploadMode := "s3"
+		if cfg.R2Images.UploadAPIURL != "" {
+			objectStore = service.NewWorkerObjectStore(cfg.R2Images.UploadAPIURL, cfg.R2Images.UploadAPIToken, 30*time.Second)
+			uploadMode = "worker"
+		} else {
+			r2Store, err := service.NewR2ObjectStore(context.Background(), service.R2ObjectStoreConfig{
+				Endpoint:        cfg.R2Images.Endpoint,
+				AccessKeyID:     cfg.R2Images.AccessKeyID,
+				SecretAccessKey: cfg.R2Images.SecretAccessKey,
+				Bucket:          cfg.R2Images.Bucket,
+			})
+			if err != nil {
+				log.Fatal().Err(err).Msg("Failed to initialize Cloudflare R2 image store")
+			}
+			objectStore = r2Store
+		}
+
+		imageSyncer = service.NewImageSyncer(service.ImageSyncerConfig{
+			Enabled:       true,
+			PublicBaseURL: cfg.R2Images.PublicBaseURL,
+			KeyPrefix:     cfg.R2Images.KeyPrefix,
+			MaxImageBytes: cfg.R2Images.MaxImageBytes,
+		}, service.NewHTTPImageFetcher(15*time.Second), objectStore)
+
+		log.Info().
+			Str("bucket", cfg.R2Images.Bucket).
+			Str("public_url", cfg.R2Images.PublicBaseURL).
+			Str("key_prefix", cfg.R2Images.KeyPrefix).
+			Str("upload_mode", uploadMode).
+			Msg("Cloudflare R2 Douban image sync enabled")
+	}
+
+	doubanService := service.NewDoubanService(httpClient, imageSyncer)
 	tmdbService := service.NewTMDBService(cfg.TMDBAPIKeys, cfg.TMDBBaseURL, cfg.TMDBImageBase)
 	if tmdbService.IsConfigured() {
 		log.Info().Int("keys", tmdbService.KeyCount()).Msg("🎬 TMDB service enabled (轮询模式)")

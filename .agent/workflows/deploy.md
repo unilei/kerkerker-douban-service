@@ -8,35 +8,18 @@ description: Deploy douban-service Docker image to server
 
 ---
 
-## 第一部分：本地构建并推送镜像
+## 第一部分：发布 GHCR 镜像
 
-### 1. 确保 Docker 运行中
-
-```bash
-docker info
-```
-
-### 2. 登录 Docker Hub
+推送到 `master` 后，GitHub Actions 会自动构建 amd64/arm64 镜像并发布到：
 
 ```bash
-docker login
+ghcr.io/unilei/kerkerker-douban-service:latest
 ```
 
-### 3. 构建并推送镜像
-
-// turbo
+需要手动发布时，使用具备 `write:packages` 权限的 GitHub Personal Access Token：
 
 ```bash
-cd /Users/lei/workspace/kerkerker-www/kerkerker-douban-service
-./scripts/docker-push.sh -u YOUR_DOCKER_USERNAME VERSION
-```
-
-**参数说明：**
-
-- `YOUR_DOCKER_USERNAME`: 你的 Docker Hub 用户名
-- `VERSION`: 版本号（如 `1.0.0`）或 `latest`
-
-**脚本会询问是否构建多平台镜像 (amd64/arm64)，推荐选 Y**
+GITHUB_TOKEN=YOUR_GITHUB_TOKEN ./scripts/docker-push.sh VERSION
 
 ---
 
@@ -73,9 +56,6 @@ nano .env
 **必须配置的环境变量：**
 
 ```env
-# Docker Hub 用户名
-DOCKER_USERNAME=your_username
-
 # 管理面板密码（重要）
 ADMIN_API_KEY=your_secure_password
 
@@ -119,7 +99,7 @@ douban-service update
 cd /path/to/kerkerker-douban-service
 
 # 2. 拉取最新镜像
-docker pull YOUR_USERNAME/kerkerker-douban-service:latest
+docker pull ghcr.io/unilei/kerkerker-douban-service:latest
 
 # 3. 重启服务
 docker-compose down

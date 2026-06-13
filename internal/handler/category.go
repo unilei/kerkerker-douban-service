@@ -90,6 +90,10 @@ func (h *CategoryHandler) GetCategory(c *gin.Context) {
 		Total    int             `json:"total"`
 	}
 	if err := h.cache.Get(ctx, cacheKey, &cachedData); err == nil {
+		cachedData.Subjects = h.doubanService.SyncSubjectImages(ctx, cachedData.Subjects)
+		if h.doubanService.ImageSyncEnabled() {
+			h.cache.SetKeepTTL(ctx, cacheKey, cachedData)
+		}
 		c.Set("cache_source", "redis-cache") // 标记缓存命中供 metrics 追踪
 		c.JSON(http.StatusOK, model.APIResponse{
 			Code: 200,
@@ -124,6 +128,7 @@ func (h *CategoryHandler) GetCategory(c *gin.Context) {
 	}
 
 	subjects := data.Subjects
+	subjects = h.doubanService.SyncSubjectImages(ctx, subjects)
 	estimatedTotal := 100
 	if len(subjects) < limit {
 		estimatedTotal = pageStart + len(subjects)

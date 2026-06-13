@@ -37,6 +37,10 @@ func (h *LatestHandler) GetLatest(c *gin.Context) {
 	// Check cache
 	var cachedData []model.CategoryData
 	if err := h.cache.Get(ctx, latestCacheKey, &cachedData); err == nil {
+		cachedData = h.doubanService.SyncCategoryDataImages(ctx, cachedData)
+		if h.doubanService.ImageSyncEnabled() {
+			h.cache.SetKeepTTL(ctx, latestCacheKey, cachedData)
+		}
 		c.Set("cache_source", "redis-cache") // 标记缓存命中供 metrics 追踪
 		c.JSON(http.StatusOK, model.APIResponse{
 			Code:   200,
@@ -101,6 +105,7 @@ func (h *LatestHandler) GetLatest(c *gin.Context) {
 		}
 		totalItems += len(r.data)
 	}
+	resultData = h.doubanService.SyncCategoryDataImages(ctx, resultData)
 
 	// Cache result (30 minutes)
 	h.cache.Set(ctx, latestCacheKey, resultData)
