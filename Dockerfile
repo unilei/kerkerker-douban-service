@@ -13,8 +13,9 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the binary
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /server ./cmd/server
+# Build binaries (server + daily refresh)
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /server ./cmd/server && \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /refresh ./cmd/refresh
 
 # Runtime stage
 FROM alpine:3.19
@@ -27,8 +28,9 @@ RUN apk --no-cache add ca-certificates tzdata
 # Set timezone
 ENV TZ=Asia/Shanghai
 
-# Copy binary from builder
+# Copy binaries from builder
 COPY --from=builder /server /app/server
+COPY --from=builder /refresh /app/refresh
 
 # Copy web static files
 COPY web/static /app/web/static

@@ -1,16 +1,16 @@
 name: Refresh Douban data
 
-# 每日定时刷新 douban-service MongoDB 持久层中的陈旧影片数据，并增量同步图片到 R2。
-# 也可在 GitHub Actions 页面手动触发，便于补数据或临时刷新。
+# 每日定时刷新的「主通道」是部署服务器上的 crontab（见 README）：
+#   0 2 * * * docker run --rm --network <douban-network> --env-file /opt/kerkerker-douban-service/douban.env \
+#     ghcr.io/unilei/kerkerker-douban-service:latest /app/refresh --max-age=24h --limit=500
+# 原因：douban-mongo 仅在 docker 内网可达，GitHub runner 无法直连。
 #
-# 需要在仓库 Settings → Secrets 中配置：
-#   MONGO_URI              - MongoDB 连接串（含账号密码）
+# 本 workflow 仅保留手动触发（workflow_dispatch），用于将来 Mongo 可公网访问时
+# （或通过 SSH action）从 Actions 侧补数据。需要配置 Secrets：
+#   MONGO_URI              - MongoDB 连接串（含账号密码，公网可达）
 #   DOUBAN_API_PROXY       - （可选）豆瓣请求代理，逗号分隔
-#   CLOUDFLARE_R2_PUBLIC_URL / UPLOAD_API_URL / UPLOAD_API_TOKEN 等图片同步凭据（可选）
+#   CLOUDFLARE_R2_*        - （可选）图片同步凭据
 on:
-  schedule:
-    # 每天 UTC 18:00 ≈ 北京时间次日 02:00，低峰期刷新
-    - cron: '0 18 * * *'
   workflow_dispatch:
     inputs:
       max_age:
@@ -42,11 +42,9 @@ jobs:
           go-version: '1.24'
 
       - name: Build refresh binary
-        working-directory: kerkerker-douban-service
         run: go build -o /tmp/refresh ./cmd/refresh
 
       - name: Run refresh
-        working-directory: kerkerker-douban-service
         env:
           MONGO_URI: ${{ secrets.MONGO_URI }}
           MONGO_DB_NAME: ${{ secrets.MONGO_DB_NAME }}
