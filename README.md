@@ -8,7 +8,7 @@
 
 **豆瓣数据 API 微服务** - 为 Kerkerker 项目提供电影、电视剧数据 API
 
-[快速开始](#-快速开始) • [API 文档](#-api-端点) • [部署指南](#-服务器部署) • [管理面板](#-管理面板)
+[快速开始](#-快速开始) • [持久化架构](#️-数据持久化架构) • [API 文档](#-api-端点) • [每日刷新](#每日刷新) • [部署指南](#-服务器部署) • [管理面板](#-管理面板)
 
 </div>
 
@@ -17,9 +17,11 @@
 ## ✨ 特性
 
 - 🚀 **高性能** - Go + Gin 框架，响应速度快
-- 💾 **多级缓存** - Redis 缓存层，减少 API 调用
+- 💾 **三层存储** - Redis 热缓存 → MongoDB 持久真相源 → 豆瓣冷源，缓存过期后不再重复抓取
+- 🆔 **内部 ID 关联键** - 每部影片分配稳定的自增 `internal_id`，作为跨数据源（VOD/网盘）的关联主键
+- 🔄 **每日定时刷新** - 每天低峰期自动刷新陈旧影片数据并增量同步图片
 - 🔀 **代理轮询** - 支持多代理负载均衡，突破 IP 限制
-- ☁️ **R2 图片镜像** - 自动同步豆瓣图片到 Cloudflare R2，后续直接返回 CDN URL
+- ☁️ **R2 图片镜像** - 自动同步豆瓣图片到 Cloudflare R2，映射持久化到 Mongo，重启后不重复上传
 - 🎞️ **TMDB 集成** - 获取高质量横向海报
 - 📊 **数据分析** - 内置 API 调用统计和性能监控
 - 🔐 **安全认证** - Admin API Key 保护管理接口
@@ -28,12 +30,12 @@
 
 ## 📦 技术栈
 
-| 组件     | 技术                    |
-| -------- | ----------------------- |
-| 后端框架 | Go 1.24 + Gin           |
-| 缓存     | Redis 7                 |
-| 数据库   | MongoDB 7 (可选)        |
-| 容器化   | Docker + Docker Compose |
+| 组件     | 技术                            |
+| -------- | ------------------------------- |
+| 后端框架 | Go 1.24 + Gin                   |
+| 热缓存   | Redis 7                         |
+| 持久层   | MongoDB 7（可选，未配置自动降级） |
+| 容器化   | Docker + Docker Compose         |
 
 ## 🚀 快速开始
 
@@ -74,7 +76,60 @@ go mod download
 
 # 启动服务
 go run cmd/server/main.go
+
+# 手动跑一次每日刷新（详见「每日刷新」章节）
+go run cmd/refresh/main.go --max-age=24h --limit=500
 ```
+
+## 🗄️ 数据持久化架构
+
+配置 `MONGO_URI` 后，服务从「纯 Redis 缓存」升级为三层存储，豆瓣只在 Mongo 未命中时被回源：
+
+```
+请求 ──► ① Redis 热缓存（秒级，TTL 到期自动过期）
+          │ 未命中
+          ▼
+        ② MongoDB 持久真相源（永不过期，重启/Redis 清空后兜底）
+          │ 未命中
+          ▼
+        ③ 豆瓣冷源（回源抓取 → 落库 Mongo → 回填 Redis）
+```
+
+**降级行为**：`MONGO_URI` 未配置或 Mongo 不可用时，自动退回旧的 Redis-only 模式（仅记日志，不阻断服务），完全向后兼容。
+
+### MongoDB 集合
+
+| 集合            | 用途                                                                 |
+| --------------- | -------------------------------------------------------------------- |
+| `movies`        | 影片详情快照。`douban_id` 唯一索引，含完整 `detail`、刷新状态字段     |
+| `counters`      | `internal_id` 原子自增分配器（`findAndModify $inc`）                  |
+| `image_mappings`| 原图 URL → R2 镜像 URL 的持久映射，进程重启后复用已上传对象           |
+| `snapshots`     | 列表型端点（hero/movies/tv/new/search 等）的载荷快照，按缓存键存储    |
+
+### internal_id 关联键
+
+每部影片首次落库时分配一个**自增整数 `internal_id`**（与豆瓣 ID 解耦、永不变化），作为跨数据源关联的主键 —— 例如网盘链接、VOD 匹配等下游功能统一用它关联，不受豆瓣 ID 变更影响。
+
+- 详情响应自动带 `internal_id` 字段
+- 规范化查询端点：`GET /api/v1/movies/:internal_id`
+- 兼容入口 `GET /api/v1/detail/:douban_id` 保留（legacy alias），同样返回 `internal_id`
+
+### 每日刷新
+
+`cmd/refresh` 二进制扫描 `refresh_status=stale` 或超过 24h 未刷新的影片，重新回源豆瓣更新 Mongo 并增量同步图片。**主通道是部署服务器上的 crontab**（douban-mongo 通常仅 docker 内网可达，GitHub runner 无法直连）：
+
+```bash
+# crontab -e（每天北京时间 02:00 低峰期执行）
+0 2 * * * flock -n /tmp/douban-refresh.lock docker run --rm \
+  --network kerkerker-douban-service_douban-network \
+  --env-file /opt/kerkerker-douban-service/douban.env \
+  ghcr.io/unilei/kerkerker-douban-service:latest \
+  /app/refresh --max-age=24h --limit=500 >> /var/log/douban-refresh.log 2>&1
+```
+
+常用参数：`--max-age`（陈旧阈值，默认 24h）、`--limit`（单次上限，默认 500）、`--dry-run`（只列出待刷新条目）。
+
+`.github/workflows/refresh.yml` 仅保留 `workflow_dispatch` 手动触发（需在 Secrets 配置公网可达的 `MONGO_URI`），用于临时补数据；定时任务以服务器 cron 为准。
 
 ## 📡 API 端点
 
@@ -88,7 +143,8 @@ go run cmd/server/main.go
 | `/api/v1/tv`              | GET  | 电视剧分类       | `/api/v1/tv`                                  |
 | `/api/v1/new`             | GET  | 新上线筛选       | `/api/v1/new`                                 |
 | `/api/v1/category`        | GET  | 分类分页         | `/api/v1/category?category=hot_movies&page=1` |
-| `/api/v1/detail/:id`      | GET  | 影片详情         | `/api/v1/detail/1291546`                      |
+| `/api/v1/detail/:id`      | GET  | 影片详情（豆瓣 ID，legacy 兼容） | `/api/v1/detail/1291546`            |
+| `/api/v1/movies/:internal_id` | GET | 影片详情（内部 ID，规范化入口） | `/api/v1/movies/42`                |
 | `/api/v1/search`          | GET  | 搜索影片         | `/api/v1/search?q=流浪地球`                   |
 | `/api/v1/calendar`        | GET  | 追剧日历         | `/api/v1/calendar?start_date=2026-01-09`      |
 | `/api/v1/calendar/airing` | GET  | 今日热播         | `/api/v1/calendar/airing?region=CN`           |
@@ -130,9 +186,9 @@ GIN_MODE=release                   # 运行模式: debug/release
 # Redis 配置
 REDIS_URL=redis://localhost:6379   # Redis 连接地址
 
-# MongoDB 配置 (可选)
-MONGODB_URI=mongodb://localhost:27017
-MONGODB_DATABASE=douban_api
+# MongoDB 持久层 (可选；未配置则降级为 Redis-only 旧模式)
+MONGO_URI=mongodb://localhost:27017/kerkerker_douban
+MONGO_DB_NAME=kerkerker_douban
 
 # 豆瓣代理 (多个用逗号分隔)
 DOUBAN_API_PROXY=https://proxy1.example.com,https://proxy2.example.com
@@ -170,6 +226,8 @@ CACHE_TTL_DEFAULT=60               # 默认缓存，默认 1 小时
 ```
 
 R2 配置完整后，服务会在公开接口返回前将豆瓣域名图片上传到 R2，并把缓存和响应中的图片地址改为 `CLOUDFLARE_R2_PUBLIC_URL`。上传失败时保留原豆瓣图片地址，不会阻断数据接口。`CLOUDFLARE_R2_PUBLIC_URL` 必须指向 Bucket 根目录的公开域名，生产环境推荐绑定 Cloudflare R2 自定义域名，不使用 `r2.dev` 开发地址。
+
+配置 `MONGO_URI` 后，原图 → R2 镜像的映射会持久化到 `image_mappings` 集合：进程重启后直接复用已上传对象，不再重复上传；同一进程内并发请求同一图片也会被 singleflight 去重，只有一个请求真正执行下载与上传。
 
 推荐部署 `cloudflare/image-upload-worker`，将它绑定到目标 Bucket，并通过 `wrangler secret put UPLOAD_TOKEN` 设置上传密钥。服务只需要公开 R2 URL、Worker `/objects` 地址和密钥；若不使用 Worker，也可以配置完整的 R2 S3 API 凭证直接上传。
 
@@ -249,6 +307,54 @@ curl http://localhost:8080/health
 
 ---
 
+### 启用 MongoDB 持久层（推荐）
+
+Docker Compose 默认只含 `douban-api` + `redis`。要启用三层存储与 `internal_id`，需要加一个 Mongo 服务并配置连接：
+
+```yaml
+# docker-compose.yml 追加
+  douban-mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - douban-mongo-data:/data/db
+    networks:
+      - douban-network
+
+volumes:
+  douban-mongo-data:
+```
+
+```env
+# .env 追加（compose 网络内的服务别名是 douban-mongo）
+MONGO_URI=mongodb://douban-mongo:27017/kerkerker_douban
+MONGO_DB_NAME=kerkerker_douban
+```
+
+已有部署按 docker run 方式管理的，把环境变量写入 env-file 后重建容器即可（生产示例）：
+
+```bash
+# 导出现有容器环境变量并追加 Mongo 配置
+docker inspect kerkerker-douban-service --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | grep -v '^PATH=' > /opt/kerkerker-douban-service/douban.env
+echo 'MONGO_URI=mongodb://mongo:27017/kerkerker_douban' >> /opt/kerkerker-douban-service/douban.env
+
+# 重建（网络、端口、healthcheck 参数保持与原容器一致）
+docker pull ghcr.io/unilei/kerkerker-douban-service:latest
+docker stop kerkerker-douban-service && docker rm kerkerker-douban-service
+docker run -d --name kerkerker-douban-service \
+  --network kerkerker-douban-service_douban-network \
+  -p 8081:8080 --restart unless-stopped \
+  --health-cmd "wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1" \
+  --health-interval 30s --health-timeout 3s --health-start-period 5s --health-retries 3 \
+  --env-file /opt/kerkerker-douban-service/douban.env \
+  ghcr.io/unilei/kerkerker-douban-service:latest
+```
+
+启动日志出现 `✅ MongoDB connected` 即接入成功；未配置 `MONGO_URI` 时日志会提示 Redis-only 模式，服务行为与旧版一致。
+
+---
+
 ### 第三步：更新已部署的服务
 
 #### 使用管理命令（一键安装后可用）
@@ -310,18 +416,21 @@ docker-compose logs redis
 
 ```
 .
-├── cmd/server/              # 应用入口
-│   └── main.go
+├── cmd/
+│   ├── server/              # API 服务入口
+│   │   └── main.go
+│   └── refresh/             # 每日刷新二进制（cron 执行，更新 Mongo + 同步图片）
+│       └── main.go
 ├── internal/
 │   ├── config/              # 配置管理
 │   ├── handler/             # API 处理器
 │   │   ├── admin.go         # 管理接口
 │   │   ├── category.go      # 分类分页
-│   │   ├── detail.go        # 影片详情
+│   │   ├── detail.go        # 影片详情（三层存储 + /movies/:internal_id）
 │   │   ├── hero.go          # Hero Banner
 │   │   ├── latest.go        # 最新内容
 │   │   ├── movies.go        # 电影分类
-│   │   ├── new.go           # 新上线
+│   │   ├── new.go           # 新上线（筛选分支持久化分页信息）
 │   │   ├── search.go        # 搜索
 │   │   └── tv.go            # 电视剧分类
 │   ├── middleware/          # 中间件
@@ -331,16 +440,24 @@ docker-compose logs redis
 │   ├── model/               # 数据模型
 │   ├── repository/          # 数据访问层
 │   │   ├── cache.go         # Redis 缓存
-│   │   └── metrics.go       # 统计存储
+│   │   ├── metrics.go       # 统计存储
+│   │   ├── movie_store.go   # movies 集合 + internal_id 自增分配
+│   │   ├── image_map_store.go   # image_mappings 集合（R2 映射持久化）
+│   │   ├── snapshot_store.go    # snapshots 集合（列表端点兜底）
+│   │   └── mongo_stores.go  # Mongo 客户端共享装配
 │   └── service/             # 业务逻辑层
-│       ├── douban.go        # 豆瓣服务
+│       ├── douban.go        # 豆瓣服务（含 FetchDetail 共享抓取）
+│       ├── image_syncer.go  # R2 图片同步（singleflight 去重）
 │       └── tmdb.go          # TMDB 服务
 ├── pkg/httpclient/          # HTTP 客户端 (代理支持)
 ├── web/static/              # 管理面板前端
+├── .github/workflows/
+│   ├── publish-image.yml    # master 推送自动构建 GHCR 镜像
+│   └── refresh.yml          # 手动触发补数据（定时主通道是服务器 cron）
 ├── scripts/
 │   ├── install.sh           # 一键部署脚本
 │   └── docker-push.sh       # 镜像推送脚本
-├── Dockerfile
+├── Dockerfile               # 同时构建 server + refresh 双二进制
 ├── docker-compose.yml
 └── go.mod
 ```
@@ -361,6 +478,8 @@ const response = await fetch(
 );
 const data = await response.json();
 ```
+
+详情响应会带 `internal_id` 字段；前端类型见 `kerkerker/lib/douban-service.ts` 的 `SubjectDetail`。下游功能（VOD 匹配、网盘链接等）应以 `internal_id` 作为关联键，通过 `GET /api/v1/movies/:internal_id` 反查，不依赖豆瓣 ID。
 
 ## 🐳 Docker 镜像
 
