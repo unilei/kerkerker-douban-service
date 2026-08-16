@@ -540,6 +540,22 @@ func (s *DoubanService) SyncHeroImages(ctx context.Context, heroes []model.HeroM
 	return s.imageSyncer.SyncHeroImages(ctx, heroes)
 }
 
+// SyncCalendarImages rewrites calendar day entries' posters (TMDB) to R2 URLs when enabled.
+func (s *DoubanService) SyncCalendarImages(ctx context.Context, days []model.CalendarDay) []model.CalendarDay {
+	if !s.ImageSyncEnabled() {
+		return days
+	}
+	return s.imageSyncer.SyncCalendarImages(ctx, days)
+}
+
+// SyncCalendarEntriesImages rewrites flat calendar entries' posters (airing) to R2 URLs when enabled.
+func (s *DoubanService) SyncCalendarEntriesImages(ctx context.Context, entries []model.CalendarEntry) []model.CalendarEntry {
+	if !s.ImageSyncEnabled() {
+		return entries
+	}
+	return s.imageSyncer.SyncCalendarEntriesImages(ctx, entries)
+}
+
 // cleanTitleForSearch 从完整标题中提取用于搜索的简短标题（去除控制字符、年份、外文片段）。
 // detail handler 与定时刷新任务共用此逻辑。
 func cleanTitleForSearch(title string) string {

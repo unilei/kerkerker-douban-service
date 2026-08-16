@@ -141,6 +141,9 @@ func (h *CalendarHandler) GetCalendar(c *gin.Context) {
 	// Group entries by date
 	calendarDays := h.groupEntriesByDate(calendarEntries, startDate, endDate)
 
+	// TMDB 海报镜像到 R2（国内直连 image.tmdb.org 被墙），失败降级为原 URL
+	calendarDays = h.doubanService.SyncCalendarImages(ctx, calendarDays)
+
 	// Count total entries
 	totalEntries := 0
 	for _, day := range calendarDays {
@@ -247,6 +250,9 @@ func (h *CalendarHandler) GetAiring(c *gin.Context) {
 
 		entries = append(entries, entry)
 	}
+
+	// TMDB 海报镜像到 R2（国内直连 image.tmdb.org 被墙），失败降级为原 URL
+	entries = h.doubanService.SyncCalendarEntriesImages(ctx, entries)
 
 	// Cache the result
 	h.cache.Set(ctx, cacheKey, entries, h.cacheTTL)

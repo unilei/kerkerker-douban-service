@@ -94,8 +94,8 @@ func TestImageSyncerKeepsOriginalURLWhenUploadFails(t *testing.T) {
 	}
 }
 
-func TestImageSyncerLeavesNonDoubanImagesUntouched(t *testing.T) {
-	sourceURL := "https://image.tmdb.org/t/p/original/poster.jpg"
+func TestImageSyncerLeavesUnrelatedImagesUntouched(t *testing.T) {
+	sourceURL := "https://cdn.example.com/some-other-host/poster.jpg"
 	fetcher := &fakeImageFetcher{}
 	store := &fakeObjectStore{}
 	syncer := NewImageSyncer(ImageSyncerConfig{
@@ -108,13 +108,39 @@ func TestImageSyncerLeavesNonDoubanImagesUntouched(t *testing.T) {
 	got := syncer.SyncURL(context.Background(), sourceURL)
 
 	if got != sourceURL {
-		t.Fatalf("expected non-Douban URL to stay unchanged, got %q", got)
+		t.Fatalf("expected unrelated URL to stay unchanged, got %q", got)
 	}
 	if fetcher.calls != 0 {
-		t.Fatalf("expected no image fetch for non-Douban URL, got %d", fetcher.calls)
+		t.Fatalf("expected no image fetch for unrelated URL, got %d", fetcher.calls)
 	}
 	if len(store.puts) != 0 {
-		t.Fatalf("expected no R2 upload for non-Douban URL, got %d", len(store.puts))
+		t.Fatalf("expected no R2 upload for unrelated URL, got %d", len(store.puts))
+	}
+}
+
+func TestImageSyncerUploadsTMDBImage(t *testing.T) {
+	sourceURL := "https://image.tmdb.org/t/p/w500/abc123.jpg"
+	fetcher := &fakeImageFetcher{images: map[string]FetchedImage{
+		sourceURL: {
+			Body:        []byte("tmdb-poster"),
+			ContentType: "image/jpeg",
+		},
+	}}
+	store := &fakeObjectStore{}
+	syncer := NewImageSyncer(ImageSyncerConfig{
+		Enabled:       true,
+		PublicBaseURL: "https://img.example.com",
+		KeyPrefix:     "douban",
+		MaxImageBytes: 4096,
+	}, fetcher, store)
+
+	got := syncer.SyncURL(context.Background(), sourceURL)
+
+	if !strings.HasPrefix(got, "https://img.example.com/douban/") {
+		t.Fatalf("expected TMDB URL to be mirrored to R2, got %q", got)
+	}
+	if len(store.puts) != 1 {
+		t.Fatalf("expected one R2 upload for TMDB URL, got %d", len(store.puts))
 	}
 }
 
@@ -152,6 +178,10 @@ func TestImageSyncerRewritesNestedDoubanImageFields(t *testing.T) {
 			Body:        []byte("photo"),
 			ContentType: "image/jpeg",
 		},
+		tmdbURL: {
+			Body:        []byte("tmdb-backdrop"),
+			ContentType: "image/jpeg",
+		},
 	}}
 	store := &fakeObjectStore{}
 	syncer := NewImageSyncer(ImageSyncerConfig{
@@ -186,10 +216,57 @@ func TestImageSyncerRewritesNestedDoubanImageFields(t *testing.T) {
 	if !strings.HasPrefix(detail.Photos[0].Image, "https://img.example.com/douban/") {
 		t.Fatalf("expected detail photo image to be rewritten, got %q", detail.Photos[0].Image)
 	}
-	if hero[0].PosterHorizontal != tmdbURL {
-		t.Fatalf("expected TMDB backdrop to stay unchanged, got %q", hero[0].PosterHorizontal)
+	if !strings.HasPrefix(hero[0].PosterHorizontal, "https://img.example.com/douban/") {
+		t.Fatalf("expected TMDB backdrop to be mirrored, got %q", hero[0].PosterHorizontal)
+	}
+	if len(store.puts) != 3 {
+		t.Fatalf("expected repeated source URLs to be uploaded once each, got %d", len(store.puts))
+	}
+}
+
+func TestImageSyncerRewritesCalendarImages(t *testing.T) {
+	posterURL := "https://image.tmdb.org/t/p/w500/p1.jpg"
+	airingPoster := "https://image.tmdb.org/t/p/w342/p2.jpg"
+	fetcher := &fakeImageFetcher{images: map[string]FetchedImage{
+		posterURL: {
+			Body:        []byte("poster"),
+			ContentType: "image/jpeg",
+		},
+		airingPoster: {
+			Body:        []byte("airing"),
+			ContentType: "image/jpeg",
+		},
+	}}
+	store := &fakeObjectStore{}
+	syncer := NewImageSyncer(ImageSyncerConfig{
+		Enabled:       true,
+		PublicBaseURL: "https://img.example.com",
+		KeyPrefix:     "douban",
+		MaxImageBytes: 4096,
+	}, fetcher, store)
+
+	days := []model.CalendarDay{{
+		Date: "2026-08-16",
+		Entries: []model.CalendarEntry{
+			{ShowName: "剧A", Poster: posterURL},
+			{ShowName: "剧A", Poster: posterURL}, // 同 URL 只上传一次
+		},
+	}}
+	entries := []model.CalendarEntry{{ShowName: "剧B", Poster: airingPoster}}
+
+	days = syncer.SyncCalendarImages(context.Background(), days)
+	entries = syncer.SyncCalendarEntriesImages(context.Background(), entries)
+
+	if !strings.HasPrefix(days[0].Entries[0].Poster, "https://img.example.com/douban/") {
+		t.Fatalf("expected calendar poster to be mirrored, got %q", days[0].Entries[0].Poster)
+	}
+	if days[0].Entries[0].Poster != days[0].Entries[1].Poster {
+		t.Fatalf("expected identical source URLs to map to the same R2 URL")
+	}
+	if !strings.HasPrefix(entries[0].Poster, "https://img.example.com/douban/") {
+		t.Fatalf("expected airing poster to be mirrored, got %q", entries[0].Poster)
 	}
 	if len(store.puts) != 2 {
-		t.Fatalf("expected repeated source URLs to be uploaded once each, got %d", len(store.puts))
+		t.Fatalf("expected 2 unique uploads, got %d", len(store.puts))
 	}
 }

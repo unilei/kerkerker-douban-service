@@ -106,7 +106,7 @@ func (s *ImageSyncer) Enabled() bool {
 		s.store != nil
 }
 
-// SyncURL mirrors a Douban image URL to R2. It returns the original URL on any failure.
+// SyncURL mirrors a Douban/TMDB image URL to R2. It returns the original URL on any failure.
 func (s *ImageSyncer) SyncURL(ctx context.Context, rawURL string) string {
 	if !s.Enabled() {
 		return rawURL
@@ -121,7 +121,7 @@ func (s *ImageSyncer) SyncURL(ctx context.Context, rawURL string) string {
 		return trimmedURL
 	}
 
-	if !isDoubanImageURL(trimmedURL) {
+	if !isMirrorableImageURL(trimmedURL) {
 		return rawURL
 	}
 
@@ -307,6 +307,40 @@ func (s *ImageSyncer) SyncHeroImages(ctx context.Context, heroes []model.HeroMov
 	return heroes
 }
 
+// SyncCalendarImages rewrites calendar day entries' posters/backdrops (TMDB) to R2 URLs.
+func (s *ImageSyncer) SyncCalendarImages(ctx context.Context, days []model.CalendarDay) []model.CalendarDay {
+	urls := make([]string, 0)
+	for i := range days {
+		for j := range days[i].Entries {
+			urls = append(urls, days[i].Entries[j].Poster, days[i].Entries[j].Backdrop)
+		}
+	}
+	synced := s.syncURLs(ctx, urls)
+
+	for i := range days {
+		for j := range days[i].Entries {
+			days[i].Entries[j].Poster = synced[days[i].Entries[j].Poster]
+			days[i].Entries[j].Backdrop = synced[days[i].Entries[j].Backdrop]
+		}
+	}
+	return days
+}
+
+// SyncCalendarEntriesImages rewrites flat calendar entries' posters/backdrops (airing endpoint).
+func (s *ImageSyncer) SyncCalendarEntriesImages(ctx context.Context, entries []model.CalendarEntry) []model.CalendarEntry {
+	urls := make([]string, 0, len(entries)*2)
+	for i := range entries {
+		urls = append(urls, entries[i].Poster, entries[i].Backdrop)
+	}
+	synced := s.syncURLs(ctx, urls)
+
+	for i := range entries {
+		entries[i].Poster = synced[entries[i].Poster]
+		entries[i].Backdrop = synced[entries[i].Backdrop]
+	}
+	return entries
+}
+
 func (s *ImageSyncer) syncURLs(ctx context.Context, urls []string) map[string]string {
 	unique := make(map[string]struct{}, len(urls))
 	for _, rawURL := range urls {
@@ -375,7 +409,9 @@ func (s *ImageSyncer) publicURL(key string) string {
 	return s.cfg.PublicBaseURL + "/" + strings.TrimLeft(key, "/")
 }
 
-func isDoubanImageURL(rawURL string) bool {
+// isMirrorableImageURL reports whether the URL points at an image host we mirror:
+// 豆瓣图床（doubanio.com / douban.com）与 TMDB（image.tmdb.org，国内被墙，需镜像）。
+func isMirrorableImageURL(rawURL string) bool {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return false
@@ -386,7 +422,12 @@ func isDoubanImageURL(rawURL string) bool {
 	}
 
 	host := strings.ToLower(parsed.Hostname())
-	if !isHostOrSubdomain(host, "doubanio.com") && !isHostOrSubdomain(host, "douban.com") {
+	mirrorable :=
+		isHostOrSubdomain(host, "doubanio.com") ||
+			isHostOrSubdomain(host, "douban.com") ||
+			isHostOrSubdomain(host, "tmdb.org") ||
+			isHostOrSubdomain(host, "themoviedb.org")
+	if !mirrorable {
 		return false
 	}
 
