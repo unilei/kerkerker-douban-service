@@ -1,6 +1,7 @@
 package httpclient
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io"
 	"math"
@@ -35,9 +36,16 @@ type Client struct {
 
 // NewClient creates a new HTTP client
 func NewClient(proxies []string) *Client {
+	// 强制 HTTP/1.1：豆瓣对 Go 默认的 h2 TLS 指纹会风控（403/302），
+	// wget 等 HTTP/1.1 客户端不受影响。
+	transport := &http.Transport{
+		ForceAttemptHTTP2: false,
+		TLSNextProto:      make(map[string]func(string, *tls.Conn) http.RoundTripper),
+	}
 	return &Client{
 		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout:   10 * time.Second,
+			Transport: transport,
 		},
 		proxies:    proxies,
 		timeout:    10 * time.Second,

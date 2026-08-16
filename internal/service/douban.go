@@ -194,11 +194,16 @@ func (s *DoubanService) getRexxarIntro(subjectID string) string {
 
 		data, err := s.client.FetchDirect(u, headers)
 		if err != nil {
+			log.Warn().Err(err).Str("id", subjectID).Str("kind", kind).Msg("Failed to fetch rexxar intro")
 			continue
 		}
 
 		var result rexxarIntroResponse
-		if err := json.Unmarshal(data, &result); err == nil && result.Intro != "" {
+		if err := json.Unmarshal(data, &result); err != nil {
+			log.Warn().Err(err).Str("id", subjectID).Str("kind", kind).Msg("Failed to parse rexxar intro")
+			continue
+		}
+		if result.Intro != "" {
 			return cleanSummary(result.Intro)
 		}
 	}
