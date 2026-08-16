@@ -173,9 +173,46 @@ func cleanSummary(fragment string) string {
 	return strings.TrimSpace(text)
 }
 
-// GetSubjectIntro 抓取豆瓣条目页并提取剧情简介全文。
-// 失败时返回空字符串，调用方按无简介降级处理，不影响其余字段。
+// rexxarIntroResponse 是 m.douban.com rexxar API 中我们关心的字段
+type rexxarIntroResponse struct {
+	Intro string `json:"intro"`
+}
+
+// getRexxarIntro 从豆瓣移动端 rexxar API 抓取剧情简介。
+// 生产环境中 movie.douban.com 的 HTML 条目页对数据中心 IP 返回 302 验证页，
+// 而 m.douban.com 的 rexxar API 宽松得多，可作为主路径；
+// 电影/剧集分别走 /movie/:id 与 /tv/:id，先电影后剧集。
+func (s *DoubanService) getRexxarIntro(subjectID string) string {
+	const mobileUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1"
+
+	for _, kind := range []string{"movie", "tv"} {
+		u := fmt.Sprintf("https://m.douban.com/rexxar/api/v2/%s/%s", kind, subjectID)
+		headers := map[string]string{
+			"User-Agent": mobileUA,
+			"Referer":    fmt.Sprintf("https://m.douban.com/%s/%s/", kind, subjectID),
+		}
+
+		data, err := s.client.FetchDirect(u, headers)
+		if err != nil {
+			continue
+		}
+
+		var result rexxarIntroResponse
+		if err := json.Unmarshal(data, &result); err == nil && result.Intro != "" {
+			return cleanSummary(result.Intro)
+		}
+	}
+	return ""
+}
+
+// GetSubjectIntro 抓取剧情简介全文：主路径为 m.douban rexxar API，
+// 失败时退回豆瓣条目页 HTML 的 v:summary（可能受 IP 风控限制）。
+// 全部失败返回空字符串，调用方按无简介降级处理，不影响其余字段。
 func (s *DoubanService) GetSubjectIntro(subjectID string) string {
+	if intro := s.getRexxarIntro(subjectID); intro != "" {
+		return intro
+	}
+
 	u := fmt.Sprintf("https://movie.douban.com/subject/%s/", subjectID)
 
 	data, err := s.client.Fetch(u)
@@ -186,7 +223,7 @@ func (s *DoubanService) GetSubjectIntro(subjectID string) string {
 
 	intro := extractSummary(string(data))
 	if intro == "" {
-		log.Debug().Str("id", subjectID).Msg("No summary found on subject page")
+		log.Debug().Str("id", subjectID).Msg("No summary found for subject")
 	}
 	return intro
 }

@@ -82,11 +82,25 @@ func (c *Client) convertToProxyURL(originalURL string) (string, bool) {
 
 // Fetch makes an HTTP GET request with retry and proxy support
 func (c *Client) Fetch(targetURL string) ([]byte, error) {
+	return c.fetch(targetURL, true, nil)
+}
+
+// FetchDirect 直连请求（不走代理轮换），可附加/覆盖请求头。
+// 用于代理仅覆盖 movie.douban.com 的场景（如 m.douban.com 的 rexxar API）。
+func (c *Client) FetchDirect(targetURL string, headers map[string]string) ([]byte, error) {
+	return c.fetch(targetURL, false, headers)
+}
+
+func (c *Client) fetch(targetURL string, allowProxy bool, extraHeaders map[string]string) ([]byte, error) {
 	var lastErr error
 
 	for attempt := 1; attempt <= c.retries; attempt++ {
 		// Convert to proxy URL (may use different proxy each retry)
 		finalURL, useProxy := c.convertToProxyURL(targetURL)
+		if !allowProxy {
+			useProxy = false
+			finalURL = targetURL
+		}
 
 		req, err := http.NewRequest("GET", finalURL, nil)
 		if err != nil {
@@ -102,6 +116,9 @@ func (c *Client) Fetch(targetURL string) ([]byte, error) {
 			req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
 			req.Header.Set("Connection", "keep-alive")
 			req.Header.Set("Cache-Control", "no-cache")
+			for k, v := range extraHeaders {
+				req.Header.Set(k, v)
+			}
 		}
 
 		resp, err := c.httpClient.Do(req)
