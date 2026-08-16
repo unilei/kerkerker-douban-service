@@ -4,15 +4,15 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"regexp"
+	"strconv"
 	"strings"
-	"sync"
 
 	"kerkerker-douban-service/internal/model"
 	"kerkerker-douban-service/internal/repository"
 	"kerkerker-douban-service/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog/log"
 )
 
 // DetailHandler handles detail API requests
@@ -45,21 +45,41 @@ func (h *DetailHandler) GetDetail(c *gin.Context) {
 
 	cacheKey := "douban:detail:" + id
 
-	// Check cache
+	// 1) Redis 热缓存
 	var cachedData model.SubjectDetail
 	if err := h.cache.Get(ctx, cacheKey, &cachedData); err == nil {
 		cachedData = h.doubanService.SyncSubjectDetailImages(ctx, cachedData)
 		if h.doubanService.ImageSyncEnabled() {
 			h.cache.SetKeepTTL(ctx, cacheKey, cachedData)
 		}
-		c.Set("cache_source", "redis-cache") // 标记缓存命中供 metrics 追踪
+		c.Set("cache_source", "redis-cache")
 		c.JSON(http.StatusOK, buildDetailResponse(cachedData, "redis-cache"))
 		return
 	}
 
-	// Get abstract
-	detail, err := h.doubanService.GetSubjectAbstract(id)
-	if err != nil || detail.Subject == nil {
+	// 2) MongoDB 持久层（若配置）。命中则填充 Redis 后返回，无需回源豆瓣。
+	store := h.doubanService.MovieStore()
+	if store != nil {
+		movie, err := store.GetByDoubanID(ctx, id)
+		if err == nil && movie != nil && movie.Detail != nil {
+			detailData := h.doubanService.SyncSubjectDetailImages(ctx, *movie.Detail)
+			detailData.InternalID = movie.InternalID
+			// 回填 Redis，下次直接命中热缓存。
+			if err := h.cache.Set(ctx, cacheKey, detailData); err != nil {
+				log.Warn().Err(err).Str("id", id).Msg("Failed to backfill Redis from Mongo")
+			}
+			c.Set("cache_source", "mongo-store")
+			c.JSON(http.StatusOK, buildDetailResponse(detailData, "mongo-store"))
+			return
+		}
+		if err != nil && err != repository.ErrMovieNotFound {
+			log.Warn().Err(err).Str("id", id).Msg("Mongo lookup failed, falling back to Douban")
+		}
+	}
+
+	// 3) 回源豆瓣
+	detailData, ok := h.fetchDetailFromDouban(ctx, id)
+	if !ok {
 		c.JSON(http.StatusNotFound, model.APIResponse{
 			Code:  404,
 			Error: "未找到该影片信息",
@@ -67,92 +87,95 @@ func (h *DetailHandler) GetDetail(c *gin.Context) {
 		return
 	}
 
-	// Extract search query from title
-	title := detail.Subject.Title
-	searchQuery := cleanTitleForSearch(title)
-
-	// Fetch additional data in parallel
-	var cover string
-	var photos []model.Photo
-	var comments []model.Comment
-	var recommendations []model.Subject
-
-	var wg sync.WaitGroup
-	wg.Add(4)
-
-	// Get cover from suggest
-	go func() {
-		defer wg.Done()
-		if searchQuery != "" {
-			if suggestions, err := h.doubanService.GetSubjectSuggest(searchQuery); err == nil {
-				for _, s := range suggestions {
-					if s.ID == id {
-						cover = s.Img
-						break
-					}
-				}
-			}
-		}
-	}()
-
-	// Get photos
-	go func() {
-		defer wg.Done()
-		photos, _ = h.doubanService.GetPhotos(id, 6, "S")
-	}()
-
-	// Get comments
-	go func() {
-		defer wg.Done()
-		comments, _ = h.doubanService.GetComments(id, 5)
-	}()
-
-	// Get recommendations
-	go func() {
-		defer wg.Done()
-		recommendations, _ = h.doubanService.GetRecommendations(id)
-		if len(recommendations) > 6 {
-			recommendations = recommendations[:6]
-		}
-	}()
-
-	wg.Wait()
-
-	// Build response
-	var shortComment *model.Comment
-	if detail.Subject.ShortComment != nil {
-		shortComment = &model.Comment{
-			Content: detail.Subject.ShortComment.Content,
-			Author: model.CommentAuthor{
-				Name: detail.Subject.ShortComment.Author,
-			},
-		}
-	}
-
-	detailData := model.SubjectDetail{
-		ID:              detail.Subject.ID,
-		Title:           detail.Subject.Title,
-		Rate:            detail.Subject.Rate,
-		URL:             detail.Subject.URL,
-		Cover:           cover,
-		Types:           detail.Subject.Types,
-		ReleaseYear:     detail.Subject.ReleaseYear,
-		Directors:       detail.Subject.Directors,
-		Actors:          detail.Subject.Actors,
-		Duration:        detail.Subject.Duration,
-		Region:          detail.Subject.Region,
-		EpisodesCount:   detail.Subject.EpisodesCount,
-		ShortComment:    shortComment,
-		Photos:          photos,
-		Comments:        comments,
-		Recommendations: recommendations,
-	}
 	detailData = h.doubanService.SyncSubjectDetailImages(ctx, detailData)
 
-	// Cache result
+	// 写入 MongoDB 持久层（失败不阻断响应）；Upsert 会分配 internal_id。
+	// 必须先于 Redis 写入，否则缓存里 internal_id 恒为 0。
+	if store != nil {
+		movie := &repository.Movie{
+			DoubanID:      id,
+			Title:         detailData.Title,
+			Rate:          detailData.Rate,
+			Cover:         detailData.Cover,
+			URL:           detailData.URL,
+			Detail:        &detailData,
+			RefreshStatus: repository.RefreshStatusFresh,
+		}
+		if err := store.Upsert(ctx, movie); err != nil {
+			log.Warn().Err(err).Str("id", id).Msg("Failed to persist movie to Mongo")
+		} else {
+			detailData.InternalID = movie.InternalID
+		}
+	}
+
+	// 写入 Redis 热缓存（此时 internal_id 已填充）
 	h.cache.Set(ctx, cacheKey, detailData)
 
 	c.JSON(http.StatusOK, buildDetailResponse(detailData, "fresh"))
+}
+
+// fetchDetailFromDouban 委托给 service 层的共享实现，避免与刷新任务重复抓取逻辑。
+func (h *DetailHandler) fetchDetailFromDouban(ctx context.Context, id string) (model.SubjectDetail, bool) {
+	return h.doubanService.FetchDetail(ctx, id)
+}
+
+// GetMovieByInternalID returns movie details by our internal numeric ID.
+// GET /api/v1/movies/:internal_id
+//
+// 内部 ID 是我们自己分配的，只有落库过的影片才有；未命中直接返回 404，
+// 不回源豆瓣（豆瓣只认它自己的 ID）。
+func (h *DetailHandler) GetMovieByInternalID(c *gin.Context) {
+	ctx := context.Background()
+	rawID := strings.TrimSpace(c.Param("internal_id"))
+	if rawID == "" {
+		c.JSON(http.StatusBadRequest, model.APIResponse{Code: 400, Error: "缺少 internal_id"})
+		return
+	}
+
+	internalID, err := strconv.ParseInt(rawID, 10, 64)
+	if err != nil || internalID <= 0 {
+		c.JSON(http.StatusBadRequest, model.APIResponse{Code: 400, Error: "internal_id 必须为正整数"})
+		return
+	}
+
+	store := h.doubanService.MovieStore()
+	if store == nil {
+		c.JSON(http.StatusServiceUnavailable, model.APIResponse{
+			Code:  503,
+			Error: "持久层未启用，无法按 internal_id 查询",
+		})
+		return
+	}
+
+	movie, err := store.GetByInternalID(ctx, internalID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, model.APIResponse{
+			Code:  404,
+			Error: "未找到该影片（internal_id=" + rawID + "）",
+		})
+		return
+	}
+
+	detailData := model.SubjectDetail{}
+	if movie.Detail != nil {
+		detailData = *movie.Detail
+	} else {
+		detailData.ID = movie.DoubanID
+		detailData.Title = movie.Title
+		detailData.Rate = movie.Rate
+		detailData.Cover = movie.Cover
+		detailData.URL = movie.URL
+	}
+	detailData.InternalID = movie.InternalID
+	detailData = h.doubanService.SyncSubjectDetailImages(ctx, detailData)
+
+	// 回填 Redis 热缓存，下次按豆瓣 ID 查也能命中。
+	if movie.DoubanID != "" {
+		_ = h.cache.Set(ctx, "douban:detail:"+movie.DoubanID, detailData)
+	}
+
+	c.Set("cache_source", "mongo-store")
+	c.JSON(http.StatusOK, buildDetailResponse(detailData, "mongo-store"))
 }
 
 // DeleteDetailCache clears detail cache
@@ -176,25 +199,6 @@ func (h *DetailHandler) DeleteDetailCache(c *gin.Context) {
 		Code:    200,
 		Message: "影片 " + id + " 的缓存已清除",
 	})
-}
-
-// cleanTitleForSearch extracts a clean title for searching
-func cleanTitleForSearch(title string) string {
-	// Remove Unicode control characters
-	re := regexp.MustCompile(`[\x{200B}-\x{200F}\x{2028}-\x{202F}\x{FEFF}]`)
-	cleaned := re.ReplaceAllString(title, "")
-
-	// Remove year in parentheses
-	reYear := regexp.MustCompile(`\s*[\(（]\d{4}[\)）]\s*`)
-	cleaned = reYear.ReplaceAllString(cleaned, "")
-
-	// Get first part
-	parts := strings.Fields(cleaned)
-	if len(parts) > 0 {
-		return strings.TrimSpace(parts[0])
-	}
-
-	return strings.TrimSpace(cleaned)
 }
 
 // DeleteAllDetailCache clears all detail cache
@@ -221,6 +225,7 @@ func (h *DetailHandler) DeleteAllDetailCache(c *gin.Context) {
 func buildDetailResponse(data model.SubjectDetail, source string) gin.H {
 	return gin.H{
 		"id":              data.ID,
+		"internal_id":     data.InternalID,
 		"title":           data.Title,
 		"rate":            data.Rate,
 		"url":             data.URL,

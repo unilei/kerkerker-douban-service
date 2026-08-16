@@ -13,6 +13,8 @@ type Config struct {
 	Port          string
 	GinMode       string
 	RedisURL      string
+	MongoURI      string // MongoDB 持久层连接串（为空则降级为纯 Redis 模式）
+	MongoDBName   string // MongoDB 数据库名
 	DoubanProxies []string
 	TMDBAPIKeys   []string // 支持多个 API Key 轮询
 	TMDBBaseURL   string
@@ -71,6 +73,8 @@ func Load() *Config {
 		Port:          getEnv("PORT", "8080"),
 		GinMode:       getEnv("GIN_MODE", "debug"),
 		RedisURL:      getEnv("REDIS_URL", "redis://localhost:6379"),
+		MongoURI:      getEnv("MONGO_URI", ""),
+		MongoDBName:   getEnv("MONGO_DB_NAME", "kerkerker_douban"),
 		DoubanProxies: proxies,
 		TMDBAPIKeys:   tmdbKeys,
 		TMDBBaseURL:   getEnv("TMDB_BASE_URL", "https://api.themoviedb.org/3"),

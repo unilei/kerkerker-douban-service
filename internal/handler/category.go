@@ -84,11 +84,13 @@ func (h *CategoryHandler) GetCategory(c *gin.Context) {
 	pageStart := (page - 1) * limit
 	cacheKey := fmt.Sprintf("douban:category:%s:page%d:limit%d", category, page, limit)
 
-	// Check cache
-	var cachedData struct {
+	type categoryPayload struct {
 		Subjects []model.Subject `json:"subjects"`
 		Total    int             `json:"total"`
 	}
+
+	// Check cache
+	var cachedData categoryPayload
 	if err := h.cache.Get(ctx, cacheKey, &cachedData); err == nil {
 		cachedData.Subjects = h.doubanService.SyncSubjectImages(ctx, cachedData.Subjects)
 		if h.doubanService.ImageSyncEnabled() {
@@ -109,6 +111,33 @@ func (h *CategoryHandler) GetCategory(c *gin.Context) {
 			Source: "redis-cache",
 		})
 		return
+	}
+
+	// Mongo 快照兜底：Redis 过期后先从持久层取，避免立即回源豆瓣。
+	snapshotStore := h.doubanService.SnapshotStore()
+	if snapshotStore != nil {
+		var snapData categoryPayload
+		if err := snapshotStore.Load(ctx, cacheKey, &snapData); err == nil {
+			snapData.Subjects = h.doubanService.SyncSubjectImages(ctx, snapData.Subjects)
+			if err := h.cache.Set(ctx, cacheKey, snapData); err != nil {
+				log.Warn().Err(err).Str("key", cacheKey).Msg("Failed to backfill Redis from Mongo snapshot")
+			}
+			c.Set("cache_source", "mongo-snapshot")
+			c.JSON(http.StatusOK, model.APIResponse{
+				Code: 200,
+				Data: gin.H{
+					"subjects": snapData.Subjects,
+					"pagination": model.Pagination{
+						Page:    page,
+						Limit:   limit,
+						Total:   snapData.Total,
+						HasMore: pageStart+len(snapData.Subjects) < snapData.Total,
+					},
+				},
+				Source: "mongo-snapshot",
+			})
+			return
+		}
 	}
 
 	log.Info().
@@ -141,13 +170,16 @@ func (h *CategoryHandler) GetCategory(c *gin.Context) {
 		Msg("✓ 分页获取成功")
 
 	// Cache result
-	h.cache.Set(ctx, cacheKey, struct {
-		Subjects []model.Subject `json:"subjects"`
-		Total    int             `json:"total"`
-	}{
+	payload := categoryPayload{
 		Subjects: subjects,
 		Total:    estimatedTotal,
-	})
+	}
+	h.cache.Set(ctx, cacheKey, payload)
+	if snapshotStore != nil {
+		if err := snapshotStore.Store(ctx, cacheKey, payload); err != nil {
+			log.Warn().Err(err).Str("key", cacheKey).Msg("Failed to persist category snapshot")
+		}
+	}
 
 	c.JSON(http.StatusOK, model.APIResponse{
 		Code: 200,

@@ -81,6 +81,51 @@ func (h *NewHandler) GetNew(c *gin.Context) {
 		return
 	}
 
+	// Mongo 快照兜底：Redis 过期后先从持久层取。
+	// 过滤分支的快照包含分页信息（newFilteredSnapshot），无过滤分支只是 []CategoryData。
+	snapshotStore := h.doubanService.SnapshotStore()
+	if snapshotStore != nil {
+		if hasFilters {
+			var snap newFilteredSnapshot
+			if err := snapshotStore.Load(ctx, cacheKey, &snap); err == nil {
+				snap.Data = h.doubanService.SyncCategoryDataImages(ctx, snap.Data)
+				if err := h.cache.Set(ctx, cacheKey, snap.Data); err != nil {
+					log.Warn().Err(err).Str("key", cacheKey).Msg("Failed to backfill Redis from Mongo snapshot")
+				}
+				c.Set("cache_source", "mongo-snapshot")
+				c.JSON(http.StatusOK, gin.H{
+					"code":    200,
+					"data":    snap.Data,
+					"source":  "mongo-snapshot",
+					"filters": gin.H{"type": typ, "year": year, "region": region, "genre": genre, "sort": sort},
+					"pagination": gin.H{
+						"page":     snap.Pagination.Page,
+						"pageSize": snap.Pagination.PageSize,
+						"total":    snap.Pagination.Total,
+						"hasMore":  snap.Pagination.HasMore,
+					},
+				})
+				return
+			}
+		} else {
+			var snapData []model.CategoryData
+			if err := snapshotStore.Load(ctx, cacheKey, &snapData); err == nil {
+				snapData = h.doubanService.SyncCategoryDataImages(ctx, snapData)
+				if err := h.cache.Set(ctx, cacheKey, snapData); err != nil {
+					log.Warn().Err(err).Str("key", cacheKey).Msg("Failed to backfill Redis from Mongo snapshot")
+				}
+				c.Set("cache_source", "mongo-snapshot")
+				c.JSON(http.StatusOK, gin.H{
+					"code":    200,
+					"data":    snapData,
+					"source":  "mongo-snapshot",
+					"filters": gin.H{"type": typ, "year": year, "region": region, "genre": genre, "sort": sort},
+				})
+				return
+			}
+		}
+	}
+
 	log.Info().
 		Str("type", typ).
 		Str("year", year).
@@ -99,6 +144,19 @@ func (h *NewHandler) GetNew(c *gin.Context) {
 			Name: buildCategoryName(typ, year, region, genre),
 			Data: subjects,
 		}}
+
+		// Redis 缓存只存裸 []CategoryData（热路径，与既有行为一致）；
+		// Mongo 快照额外保留分页信息，作为持久层的完整真相源。
+		h.cache.Set(ctx, cacheKey, resultData)
+		if snapshotStore != nil {
+			filteredSnap := newFilteredSnapshot{
+				Data:       resultData,
+				Pagination: newPagination{Page: page, PageSize: pageSize, Total: total, HasMore: hasMore},
+			}
+			if err := snapshotStore.Store(ctx, cacheKey, filteredSnap); err != nil {
+				log.Warn().Err(err).Str("key", cacheKey).Msg("Failed to persist new (filtered) snapshot")
+			}
+		}
 
 		c.JSON(http.StatusOK, gin.H{
 			"code":    200,
@@ -158,6 +216,11 @@ func (h *NewHandler) GetNew(c *gin.Context) {
 
 	// Cache result
 	h.cache.Set(ctx, cacheKey, resultData)
+	if snapshotStore != nil {
+		if err := snapshotStore.Store(ctx, cacheKey, resultData); err != nil {
+			log.Warn().Err(err).Str("key", cacheKey).Msg("Failed to persist new snapshot")
+		}
+	}
 
 	totalItems := 0
 	for _, r := range resultData {
@@ -247,6 +310,21 @@ func buildCategoryName(typ, year, region, genre string) string {
 		return strings.Join(parts, " · ")
 	}
 	return "热门"
+}
+
+// newPagination 是筛选分支快照里保存的分页信息，与 fresh-data 响应的 pagination 字段一一对应。
+type newPagination struct {
+	Page     int  `json:"page" bson:"page"`
+	PageSize int  `json:"pageSize" bson:"page_size"`
+	Total    int  `json:"total" bson:"total"`
+	HasMore  bool `json:"hasMore" bson:"has_more"`
+}
+
+// newFilteredSnapshot 是 /new 筛选分支持久化到 Mongo snapshots 的载荷：
+// 既保留分类数据，也保留分页信息，避免 Redis 过期后从快照恢复时分页丢失。
+type newFilteredSnapshot struct {
+	Data       []model.CategoryData `json:"data" bson:"data"`
+	Pagination newPagination         `json:"pagination" bson:"pagination"`
 }
 
 // DeleteNewCache clears new content cache

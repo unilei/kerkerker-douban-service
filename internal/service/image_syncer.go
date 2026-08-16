@@ -15,8 +15,10 @@ import (
 	"time"
 
 	"kerkerker-douban-service/internal/model"
+	"kerkerker-douban-service/internal/repository"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/singleflight"
 )
 
 const defaultMaxImageBytes int64 = 10 * 1024 * 1024
@@ -60,9 +62,15 @@ type ImageSyncer struct {
 	cfg     ImageSyncerConfig
 	fetcher ImageFetcher
 	store   ObjectStore
+	// mapStore 持久化「原图URL → R2镜像URL」映射，使进程重启后能复用已上传对象。
+	// 为 nil 时仅用进程内存缓存（旧行为）。
+	mapStore repository.ImageMapStore
 
 	mu    sync.RWMutex
 	cache map[string]string
+	// flight 按「原图URL」去重 fetch+upload：同一进程内并发请求同一图片时，
+	// 只有一个 goroutine 真正下载并上传，其余调用复用其结果，避免 R2 重复上传。
+	flight singleflight.Group
 }
 
 // NewImageSyncer creates a new image syncer.
@@ -79,6 +87,14 @@ func NewImageSyncer(cfg ImageSyncerConfig, fetcher ImageFetcher, store ObjectSto
 		store:   store,
 		cache:   make(map[string]string),
 	}
+}
+
+// SetMapStore 注入持久化映射存储。可选调用；传入 nil 表示仅用内存缓存。
+func (s *ImageSyncer) SetMapStore(store repository.ImageMapStore) {
+	if s == nil {
+		return
+	}
+	s.mapStore = store
 }
 
 // Enabled reports whether the syncer is ready to mirror images.
@@ -113,6 +129,25 @@ func (s *ImageSyncer) SyncURL(ctx context.Context, rawURL string) string {
 		return cached
 	}
 
+	// 内存未命中时查持久化映射（命中即复用，无需重新上传）。
+	if s.mapStore != nil {
+		if mapped, err := s.mapStore.Get(ctx, trimmedURL); err == nil && mapped != "" {
+			s.setCachedURL(trimmedURL, mapped)
+			return mapped
+		}
+	}
+
+	// singleflight 去重：同一 URL 的并发上传只执行一次，其余请求复用结果。
+	// 首次完成后会写入 cache/mapStore，之后的新请求会走缓存路径，不再进入 flight。
+	result, _, _ := s.flight.Do(trimmedURL, func() (any, error) {
+		return s.fetchAndUpload(ctx, trimmedURL, rawURL), nil
+	})
+	return result.(string)
+}
+
+// fetchAndUpload 执行单张图片的下载与上传，并在成功后写回内存缓存与持久化映射。
+// 失败时返回原始 URL（降级，不阻断主流程）。
+func (s *ImageSyncer) fetchAndUpload(ctx context.Context, trimmedURL, rawURL string) string {
 	operationCtx, cancel := context.WithTimeout(ctx, imageSyncOperationTimeout)
 	defer cancel()
 
@@ -145,6 +180,11 @@ func (s *ImageSyncer) SyncURL(ctx context.Context, rawURL string) string {
 	}
 
 	s.setCachedURL(trimmedURL, publicURL)
+	if s.mapStore != nil {
+		if err := s.mapStore.Put(ctx, trimmedURL, publicURL); err != nil {
+			log.Warn().Err(err).Str("url", trimmedURL).Msg("Failed to persist image mapping")
+		}
+	}
 	return publicURL
 }
 

@@ -43,6 +43,27 @@ func main() {
 	}
 	defer cache.Close()
 
+	// Initialize MongoDB persistent layer (optional; falls back to Redis-only mode if unconfigured/unavailable).
+	var (
+		movieStore    repository.MovieStore
+		imageMapStore repository.ImageMapStore
+		snapshotStore repository.SnapshotStore
+	)
+	if cfg.MongoURI != "" {
+		stores, mongoErr := repository.NewMongoStores(context.Background(), cfg.MongoURI, cfg.MongoDBName)
+		if mongoErr != nil {
+			log.Warn().Err(mongoErr).Msg("⚠️  MongoDB unavailable, falling back to Redis-only mode (will re-fetch Douban on cache miss)")
+		} else {
+			movieStore = stores.Movie
+			imageMapStore = stores.ImageMap
+			snapshotStore = stores.Snapshot
+			log.Info().Str("db", cfg.MongoDBName).Msg("✅ MongoDB connected (persistent movie store + image mappings + snapshots)")
+			defer stores.Close(context.Background())
+		}
+	} else {
+		log.Info().Msg("ℹ️  MONGO_URI not set, running in Redis-only mode")
+	}
+
 	// Initialize metrics
 	metrics, err := repository.NewMetrics(cfg.RedisURL)
 	if err != nil {
@@ -85,16 +106,24 @@ func main() {
 			KeyPrefix:     cfg.R2Images.KeyPrefix,
 			MaxImageBytes: cfg.R2Images.MaxImageBytes,
 		}, service.NewHTTPImageFetcher(15*time.Second), objectStore)
+		if imageMapStore != nil {
+			imageSyncer.SetMapStore(imageMapStore)
+		}
 
 		log.Info().
 			Str("bucket", cfg.R2Images.Bucket).
 			Str("public_url", cfg.R2Images.PublicBaseURL).
 			Str("key_prefix", cfg.R2Images.KeyPrefix).
 			Str("upload_mode", uploadMode).
+			Bool("persistent_mapping", imageMapStore != nil).
 			Msg("Cloudflare R2 Douban image sync enabled")
 	}
 
 	doubanService := service.NewDoubanService(httpClient, imageSyncer)
+	if movieStore != nil {
+		doubanService.SetMovieStore(movieStore)
+		doubanService.SetSnapshotStore(snapshotStore)
+	}
 	tmdbService := service.NewTMDBService(cfg.TMDBAPIKeys, cfg.TMDBBaseURL, cfg.TMDBImageBase)
 	if tmdbService.IsConfigured() {
 		log.Info().Int("keys", tmdbService.KeyCount()).Msg("🎬 TMDB service enabled (轮询模式)")
@@ -140,6 +169,7 @@ func main() {
 		api.GET("/hero", heroHandler.GetHero)
 		api.GET("/category", categoryHandler.GetCategory)
 		api.GET("/detail/:id", detailHandler.GetDetail)
+		api.GET("/movies/:internal_id", detailHandler.GetMovieByInternalID)
 		api.GET("/latest", latestHandler.GetLatest)
 		api.GET("/movies", moviesHandler.GetMovies)
 		api.GET("/tv", tvHandler.GetTV)

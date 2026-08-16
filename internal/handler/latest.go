@@ -50,6 +50,25 @@ func (h *LatestHandler) GetLatest(c *gin.Context) {
 		return
 	}
 
+	// Mongo 快照兜底：Redis 过期后先从持久层取。
+	snapshotStore := h.doubanService.SnapshotStore()
+	if snapshotStore != nil {
+		var snapData []model.CategoryData
+		if err := snapshotStore.Load(ctx, latestCacheKey, &snapData); err == nil {
+			snapData = h.doubanService.SyncCategoryDataImages(ctx, snapData)
+			if err := h.cache.Set(ctx, latestCacheKey, snapData); err != nil {
+				log.Warn().Err(err).Str("key", latestCacheKey).Msg("Failed to backfill Redis from Mongo snapshot")
+			}
+			c.Set("cache_source", "mongo-snapshot")
+			c.JSON(http.StatusOK, model.APIResponse{
+				Code:   200,
+				Data:   snapData,
+				Source: "mongo-snapshot",
+			})
+			return
+		}
+	}
+
 	log.Info().Msg("🆕 开始获取最新内容数据...")
 
 	// Fetch data in parallel
@@ -109,6 +128,11 @@ func (h *LatestHandler) GetLatest(c *gin.Context) {
 
 	// Cache result (30 minutes)
 	h.cache.Set(ctx, latestCacheKey, resultData)
+	if snapshotStore != nil {
+		if err := snapshotStore.Store(ctx, latestCacheKey, resultData); err != nil {
+			log.Warn().Err(err).Str("key", latestCacheKey).Msg("Failed to persist latest snapshot")
+		}
+	}
 
 	log.Info().Msg("✅ 最新内容数据获取成功")
 

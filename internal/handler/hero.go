@@ -61,6 +61,25 @@ func (h *HeroHandler) GetHero(c *gin.Context) {
 		return
 	}
 
+	// Mongo 快照兜底：Redis 过期后先从持久层取。
+	snapshotStore := h.doubanService.SnapshotStore()
+	if snapshotStore != nil {
+		var snapData []model.HeroMovie
+		if err := snapshotStore.Load(ctx, heroDataCacheKey, &snapData); err == nil {
+			snapData = h.doubanService.SyncHeroImages(ctx, snapData)
+			if err := h.cache.Set(ctx, heroDataCacheKey, snapData, h.cacheTTL); err != nil {
+				log.Warn().Err(err).Str("key", heroDataCacheKey).Msg("Failed to backfill Redis from Mongo snapshot")
+			}
+			c.Set("cache_source", "mongo-snapshot")
+			c.JSON(http.StatusOK, model.APIResponse{
+				Code:   200,
+				Data:   snapData,
+				Source: "mongo-snapshot",
+			})
+			return
+		}
+	}
+
 	proxyInfo := ""
 	if h.doubanService.HasProxy() {
 		proxyInfo = fmt.Sprintf(" (代理: %d个)", h.doubanService.ProxyCount())
@@ -204,6 +223,11 @@ func (h *HeroHandler) GetHero(c *gin.Context) {
 	// Cache the result
 	if len(heroMovies) > 0 {
 		h.cache.Set(ctx, heroDataCacheKey, heroMovies, h.cacheTTL)
+		if snapshotStore != nil {
+			if err := snapshotStore.Store(ctx, heroDataCacheKey, heroMovies); err != nil {
+				log.Warn().Err(err).Str("key", heroDataCacheKey).Msg("Failed to persist hero snapshot")
+			}
+		}
 	}
 
 	log.Info().Int("count", len(heroMovies)).Msg("✅ Hero Banner 数据获取成功")

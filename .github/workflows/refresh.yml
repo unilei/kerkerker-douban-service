@@ -1,0 +1,62 @@
+name: Refresh Douban data
+
+# 每日定时刷新 douban-service MongoDB 持久层中的陈旧影片数据，并增量同步图片到 R2。
+# 也可在 GitHub Actions 页面手动触发，便于补数据或临时刷新。
+#
+# 需要在仓库 Settings → Secrets 中配置：
+#   MONGO_URI              - MongoDB 连接串（含账号密码）
+#   DOUBAN_API_PROXY       - （可选）豆瓣请求代理，逗号分隔
+#   CLOUDFLARE_R2_PUBLIC_URL / UPLOAD_API_URL / UPLOAD_API_TOKEN 等图片同步凭据（可选）
+on:
+  schedule:
+    # 每天 UTC 18:00 ≈ 北京时间次日 02:00，低峰期刷新
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+    inputs:
+      max_age:
+        description: "超过该时长未刷新的影片视为陈旧（Go duration，如 24h、12h）"
+        required: false
+        default: "24h"
+      limit:
+        description: "单次刷新的最大条目数"
+        required: false
+        default: "500"
+      dry_run:
+        description: "仅列出待刷新条目，不实际抓取"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Build refresh binary
+        working-directory: kerkerker-douban-service
+        run: go build -o /tmp/refresh ./cmd/refresh
+
+      - name: Run refresh
+        working-directory: kerkerker-douban-service
+        env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+          MONGO_DB_NAME: ${{ secrets.MONGO_DB_NAME }}
+          DOUBAN_API_PROXY: ${{ secrets.DOUBAN_API_PROXY }}
+          CLOUDFLARE_R2_PUBLIC_URL: ${{ secrets.CLOUDFLARE_R2_PUBLIC_URL }}
+          CLOUDFLARE_R2_UPLOAD_API_URL: ${{ secrets.CLOUDFLARE_R2_UPLOAD_API_URL }}
+          CLOUDFLARE_R2_UPLOAD_API_TOKEN: ${{ secrets.CLOUDFLARE_R2_UPLOAD_API_TOKEN }}
+          CLOUDFLARE_R2_KEY_PREFIX: ${{ secrets.CLOUDFLARE_R2_KEY_PREFIX }}
+        run: |
+          /tmp/refresh \
+            --max-age="${{ github.event.inputs.max_age || '24h' }}" \
+            --limit="${{ github.event.inputs.limit || '500' }}" \
+            --dry-run="${{ github.event.inputs.dry_run || 'false' }}"

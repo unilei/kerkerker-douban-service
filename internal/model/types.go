@@ -28,6 +28,7 @@ type Subject struct {
 // SubjectDetail contains detailed information about a subject
 type SubjectDetail struct {
 	ID              string    `json:"id"`
+	InternalID      int64     `json:"internal_id,omitempty"`
 	Title           string    `json:"title"`
 	Rate            string    `json:"rate"`
 	URL             string    `json:"url"`

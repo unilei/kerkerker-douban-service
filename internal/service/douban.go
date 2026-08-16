@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
+	"strings"
+	"sync"
 
 	"kerkerker-douban-service/internal/model"
+	"kerkerker-douban-service/internal/repository"
 	"kerkerker-douban-service/pkg/httpclient"
 
 	"github.com/rs/zerolog/log"
@@ -14,8 +18,10 @@ import (
 
 // DoubanService handles Douban API interactions
 type DoubanService struct {
-	client      *httpclient.Client
-	imageSyncer *ImageSyncer
+	client        *httpclient.Client
+	imageSyncer   *ImageSyncer
+	movieStore    repository.MovieStore    // 持久层；为 nil 时退化为纯抓取模式
+	snapshotStore repository.SnapshotStore // 列表型快照的持久兜底；为 nil 时不启用
 }
 
 // NewDoubanService creates a new DoubanService
@@ -27,6 +33,38 @@ func NewDoubanService(client *httpclient.Client, imageSyncers ...*ImageSyncer) *
 		service.imageSyncer = imageSyncers[0]
 	}
 	return service
+}
+
+// SetMovieStore 注入持久层。可选调用；传入 nil 表示不启用 Mongo 持久化（旧行为）。
+func (s *DoubanService) SetMovieStore(store repository.MovieStore) {
+	if s == nil {
+		return
+	}
+	s.movieStore = store
+}
+
+// MovieStore 返回注入的持久层（可能为 nil）。
+func (s *DoubanService) MovieStore() repository.MovieStore {
+	if s == nil {
+		return nil
+	}
+	return s.movieStore
+}
+
+// SetSnapshotStore 注入列表快照持久层。可选调用；传入 nil 表示不启用。
+func (s *DoubanService) SetSnapshotStore(store repository.SnapshotStore) {
+	if s == nil {
+		return
+	}
+	s.snapshotStore = store
+}
+
+// SnapshotStore 返回注入的快照持久层（可能为 nil）。
+func (s *DoubanService) SnapshotStore() repository.SnapshotStore {
+	if s == nil {
+		return nil
+	}
+	return s.snapshotStore
 }
 
 // SearchSubjects searches for subjects by tag
@@ -238,6 +276,92 @@ func (s *DoubanService) HasProxy() bool {
 	return s.client.HasProxy()
 }
 
+// FetchDetail 抓取豆瓣并组装出一条影片的完整详情（抽象 + 封面 + 剧照 + 评论 + 推荐）。
+// detail handler 与定时刷新任务共用此逻辑，确保两条路径产出一致的 SubjectDetail。
+// 第二个返回值表示是否拿到抽象数据；为 false 时调用方应视为未找到。
+func (s *DoubanService) FetchDetail(ctx context.Context, doubanID string) (model.SubjectDetail, bool) {
+	detail, err := s.GetSubjectAbstract(doubanID)
+	if err != nil || detail.Subject == nil {
+		return model.SubjectDetail{}, false
+	}
+
+	title := detail.Subject.Title
+	searchQuery := cleanTitleForSearch(title)
+
+	var (
+		cover          string
+		photos         []model.Photo
+		comments       []model.Comment
+		recommendations []model.Subject
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(4)
+
+	go func() {
+		defer wg.Done()
+		if searchQuery != "" {
+			if suggestions, err := s.GetSubjectSuggest(searchQuery); err == nil {
+				for _, sug := range suggestions {
+					if sug.ID == doubanID {
+						cover = sug.Img
+						break
+					}
+				}
+			}
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		photos, _ = s.GetPhotos(doubanID, 6, "S")
+	}()
+
+	go func() {
+		defer wg.Done()
+		comments, _ = s.GetComments(doubanID, 5)
+	}()
+
+	go func() {
+		defer wg.Done()
+		recommendations, _ = s.GetRecommendations(doubanID)
+		if len(recommendations) > 6 {
+			recommendations = recommendations[:6]
+		}
+	}()
+
+	wg.Wait()
+
+	var shortComment *model.Comment
+	if detail.Subject.ShortComment != nil {
+		shortComment = &model.Comment{
+			Content: detail.Subject.ShortComment.Content,
+			Author: model.CommentAuthor{
+				Name: detail.Subject.ShortComment.Author,
+			},
+		}
+	}
+
+	return model.SubjectDetail{
+		ID:              detail.Subject.ID,
+		Title:           detail.Subject.Title,
+		Rate:            detail.Subject.Rate,
+		URL:             detail.Subject.URL,
+		Cover:           cover,
+		Types:           detail.Subject.Types,
+		ReleaseYear:     detail.Subject.ReleaseYear,
+		Directors:       detail.Subject.Directors,
+		Actors:          detail.Subject.Actors,
+		Duration:        detail.Subject.Duration,
+		Region:          detail.Subject.Region,
+		EpisodesCount:   detail.Subject.EpisodesCount,
+		ShortComment:    shortComment,
+		Photos:          photos,
+		Comments:        comments,
+		Recommendations: recommendations,
+	}, true
+}
+
 // ProxyCount returns the number of configured proxies
 func (s *DoubanService) ProxyCount() int {
 	return s.client.ProxyCount()
@@ -286,4 +410,20 @@ func (s *DoubanService) SyncHeroImages(ctx context.Context, heroes []model.HeroM
 		return heroes
 	}
 	return s.imageSyncer.SyncHeroImages(ctx, heroes)
+}
+
+// cleanTitleForSearch 从完整标题中提取用于搜索的简短标题（去除控制字符、年份、外文片段）。
+// detail handler 与定时刷新任务共用此逻辑。
+func cleanTitleForSearch(title string) string {
+	re := regexp.MustCompile(`[\x{200B}-\x{200F}\x{2028}-\x{202F}\x{FEFF}]`)
+	cleaned := re.ReplaceAllString(title, "")
+
+	reYear := regexp.MustCompile(`\s*[\(（]\d{4}[\)）]\s*`)
+	cleaned = reYear.ReplaceAllString(cleaned, "")
+
+	parts := strings.Fields(cleaned)
+	if len(parts) > 0 {
+		return strings.TrimSpace(parts[0])
+	}
+	return strings.TrimSpace(cleaned)
 }

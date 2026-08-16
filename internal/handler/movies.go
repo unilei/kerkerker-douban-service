@@ -50,6 +50,25 @@ func (h *MoviesHandler) GetMovies(c *gin.Context) {
 		return
 	}
 
+	// Mongo 快照兜底：Redis 过期后先从持久层取。
+	snapshotStore := h.doubanService.SnapshotStore()
+	if snapshotStore != nil {
+		var snapData []model.CategoryData
+		if err := snapshotStore.Load(ctx, moviesCacheKey, &snapData); err == nil {
+			snapData = h.doubanService.SyncCategoryDataImages(ctx, snapData)
+			if err := h.cache.Set(ctx, moviesCacheKey, snapData); err != nil {
+				log.Warn().Err(err).Str("key", moviesCacheKey).Msg("Failed to backfill Redis from Mongo snapshot")
+			}
+			c.Set("cache_source", "mongo-snapshot")
+			c.JSON(http.StatusOK, model.APIResponse{
+				Code:   200,
+				Data:   snapData,
+				Source: "mongo-snapshot",
+			})
+			return
+		}
+	}
+
 	log.Info().Msg("🎬 开始获取电影分类数据...")
 
 	categories := []struct {
@@ -89,6 +108,11 @@ func (h *MoviesHandler) GetMovies(c *gin.Context) {
 
 	// Cache result (1 hour)
 	h.cache.Set(ctx, moviesCacheKey, results)
+	if snapshotStore != nil {
+		if err := snapshotStore.Store(ctx, moviesCacheKey, results); err != nil {
+			log.Warn().Err(err).Str("key", moviesCacheKey).Msg("Failed to persist movies snapshot")
+		}
+	}
 
 	totalItems := 0
 	for _, r := range results {

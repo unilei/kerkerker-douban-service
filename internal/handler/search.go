@@ -70,6 +70,25 @@ func (h *SearchHandler) Search(c *gin.Context) {
 		return
 	}
 
+	// Mongo 快照兜底：Redis 过期后先从持久层取。
+	snapshotStore := h.doubanService.SnapshotStore()
+	if snapshotStore != nil {
+		var snapData model.SearchResult
+		if err := snapshotStore.Load(ctx, cacheKey, &snapData); err == nil {
+			snapData = h.doubanService.SyncSearchResultImages(ctx, snapData)
+			if err := h.cache.Set(ctx, cacheKey, snapData); err != nil {
+				log.Warn().Err(err).Str("key", cacheKey).Msg("Failed to backfill Redis from Mongo snapshot")
+			}
+			c.Set("cache_source", "mongo-snapshot")
+			c.JSON(http.StatusOK, model.APIResponse{
+				Code:   200,
+				Data:   snapData,
+				Source: "mongo-snapshot",
+			})
+			return
+		}
+	}
+
 	log.Info().Str("query", query).Msg("🔍 搜索豆瓣")
 
 	var suggestResult []model.SuggestItem
@@ -119,6 +138,11 @@ func (h *SearchHandler) Search(c *gin.Context) {
 
 	// Cache result
 	h.cache.Set(ctx, cacheKey, result)
+	if snapshotStore != nil {
+		if err := snapshotStore.Store(ctx, cacheKey, result); err != nil {
+			log.Warn().Err(err).Str("key", cacheKey).Msg("Failed to persist search snapshot")
+		}
+	}
 
 	log.Info().
 		Int("suggest", len(suggestResult)).
