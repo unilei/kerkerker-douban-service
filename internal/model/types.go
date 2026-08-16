@@ -40,6 +40,7 @@ type SubjectDetail struct {
 	Duration        string    `json:"duration"`
 	Region          string    `json:"region"`
 	EpisodesCount   string    `json:"episodes_count"`
+	Description     string    `json:"description,omitempty"`
 	ShortComment    *Comment  `json:"short_comment,omitempty"`
 	Photos          []Photo   `json:"photos,omitempty"`
 	Comments        []Comment `json:"comments,omitempty"`

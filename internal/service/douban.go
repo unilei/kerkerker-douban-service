@@ -112,6 +112,85 @@ func (s *DoubanService) GetSubjectAbstract(subjectID string) (*model.DoubanAbstr
 	return &result, nil
 }
 
+// 豆瓣条目页的剧情简介：页面里有两个 property="v:summary" 的 span，
+// 带 class="short" 的是截断版，另一个才是全文（点「展开」显示的内容）。
+var summarySpanRe = regexp.MustCompile(`(?s)<span([^>]*?)property="v:summary"([^>]*?)>(.*?)</span>`)
+var summaryTagRe = regexp.MustCompile(`<[^>]+>`)
+var doubanSuffixRe = regexp.MustCompile(`\(?©豆瓣\)?\s*$`)
+var blankLineRe = regexp.MustCompile(`\n{3,}`)
+
+// htmlEntityReplacer 处理简介里常见的 HTML 实体
+var htmlEntityReplacer = strings.NewReplacer(
+	"&nbsp;", " ",
+	"&amp;", "&",
+	"&lt;", "<",
+	"&gt;", ">",
+	"&quot;", "\"",
+	"&#39;", "'",
+	"&ldquo;", "\u201c",
+	"&rdquo;", "\u201d",
+	"&hellip;", "\u2026",
+	"&mdash;", "\u2014",
+)
+
+// extractSummary 从条目页 HTML 中提取剧情简介全文。
+// 优先取不带 class="short" 的完整版；仅存在截断版时取最后一个（最完整）。
+func extractSummary(html string) string {
+	matches := summarySpanRe.FindAllStringSubmatch(html, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+
+	pick := ""
+	for _, m := range matches {
+		attrs := m[1] + m[2]
+		if !strings.Contains(attrs, `class="short"`) {
+			pick = m[3]
+		}
+	}
+	if pick == "" {
+		pick = matches[len(matches)-1][3]
+	}
+	return cleanSummary(pick)
+}
+
+// cleanSummary 清洗简介 HTML 片段：br 转换行、去标签、反转义实体、规整空白。
+func cleanSummary(fragment string) string {
+	text := strings.ReplaceAll(fragment, "<br>", "\n")
+	text = strings.ReplaceAll(text, "<br/>", "\n")
+	text = strings.ReplaceAll(text, "<br />", "\n")
+	text = summaryTagRe.ReplaceAllString(text, "")
+	text = htmlEntityReplacer.Replace(text)
+	text = doubanSuffixRe.ReplaceAllString(text, "")
+
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimSpace(line)
+	}
+	text = strings.Join(lines, "\n")
+	text = blankLineRe.ReplaceAllString(text, "\n\n")
+
+	return strings.TrimSpace(text)
+}
+
+// GetSubjectIntro 抓取豆瓣条目页并提取剧情简介全文。
+// 失败时返回空字符串，调用方按无简介降级处理，不影响其余字段。
+func (s *DoubanService) GetSubjectIntro(subjectID string) string {
+	u := fmt.Sprintf("https://movie.douban.com/subject/%s/", subjectID)
+
+	data, err := s.client.Fetch(u)
+	if err != nil {
+		log.Debug().Err(err).Str("id", subjectID).Msg("Failed to fetch subject page for intro")
+		return ""
+	}
+
+	intro := extractSummary(string(data))
+	if intro == "" {
+		log.Debug().Str("id", subjectID).Msg("No summary found on subject page")
+	}
+	return intro
+}
+
 // GetSubjectSuggest gets search suggestions
 func (s *DoubanService) GetSubjectSuggest(query string) ([]model.SuggestItem, error) {
 	u := fmt.Sprintf("https://movie.douban.com/j/subject_suggest?q=%s", url.QueryEscape(query))
@@ -289,14 +368,15 @@ func (s *DoubanService) FetchDetail(ctx context.Context, doubanID string) (model
 	searchQuery := cleanTitleForSearch(title)
 
 	var (
-		cover          string
-		photos         []model.Photo
-		comments       []model.Comment
+		cover           string
+		description     string
+		photos          []model.Photo
+		comments        []model.Comment
 		recommendations []model.Subject
 	)
 
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(5)
 
 	go func() {
 		defer wg.Done()
@@ -310,6 +390,11 @@ func (s *DoubanService) FetchDetail(ctx context.Context, doubanID string) (model
 				}
 			}
 		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		description = s.GetSubjectIntro(doubanID)
 	}()
 
 	go func() {
@@ -355,6 +440,7 @@ func (s *DoubanService) FetchDetail(ctx context.Context, doubanID string) (model
 		Duration:        detail.Subject.Duration,
 		Region:          detail.Subject.Region,
 		EpisodesCount:   detail.Subject.EpisodesCount,
+		Description:     description,
 		ShortComment:    shortComment,
 		Photos:          photos,
 		Comments:        comments,
