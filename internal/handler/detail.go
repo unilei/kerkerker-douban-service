@@ -237,6 +237,7 @@ func buildDetailResponse(data model.SubjectDetail, source string) gin.H {
 		"duration":        data.Duration,
 		"region":          data.Region,
 		"episodes_count":  data.EpisodesCount,
+		"description":     data.Description,
 		"short_comment":   data.ShortComment,
 		"photos":          data.Photos,
 		"comments":        data.Comments,
