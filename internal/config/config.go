@@ -21,7 +21,8 @@ type Config struct {
 	TMDBImageBase string
 
 	// Cloudflare R2 image sync
-	R2Images R2ImageConfig
+	R2Images           R2ImageConfig
+	RequireR2ImageSync bool
 
 	// 缓存 TTL 配置（差异化）
 	CacheTTLHero     time.Duration // Hero Banner 缓存时间
@@ -70,16 +71,17 @@ func Load() *Config {
 	}
 
 	return &Config{
-		Port:          getEnv("PORT", "8080"),
-		GinMode:       getEnv("GIN_MODE", "debug"),
-		RedisURL:      getEnv("REDIS_URL", "redis://localhost:6379"),
-		MongoURI:      getEnv("MONGO_URI", ""),
-		MongoDBName:   getEnv("MONGO_DB_NAME", "kerkerker_douban"),
-		DoubanProxies: proxies,
-		TMDBAPIKeys:   tmdbKeys,
-		TMDBBaseURL:   getEnv("TMDB_BASE_URL", "https://api.themoviedb.org/3"),
-		TMDBImageBase: getEnv("TMDB_IMAGE_BASE", "https://image.tmdb.org/t/p/original"),
-		R2Images:      loadR2ImageConfig(),
+		Port:               getEnv("PORT", "8080"),
+		GinMode:            getEnv("GIN_MODE", "debug"),
+		RedisURL:           getEnv("REDIS_URL", "redis://localhost:6379"),
+		MongoURI:           getEnv("MONGO_URI", ""),
+		MongoDBName:        getEnv("MONGO_DB_NAME", "kerkerker_douban"),
+		DoubanProxies:      proxies,
+		TMDBAPIKeys:        tmdbKeys,
+		TMDBBaseURL:        getEnv("TMDB_BASE_URL", "https://api.themoviedb.org/3"),
+		TMDBImageBase:      getEnv("TMDB_IMAGE_BASE", "https://image.tmdb.org/t/p/original"),
+		R2Images:           loadR2ImageConfig(),
+		RequireR2ImageSync: getBool("REQUIRE_R2_IMAGE_SYNC", false),
 
 		// 缓存 TTL（可通过环境变量覆盖，单位：分钟）
 		CacheTTLHero:     getDurationMinutes("CACHE_TTL_HERO", 360),    // 6 小时
@@ -151,6 +153,15 @@ func getDurationMinutes(key string, defaultMinutes int) time.Duration {
 func getInt64(key string, defaultValue int64) int64 {
 	if value := os.Getenv(key); value != "" {
 		if parsed, err := strconv.ParseInt(value, 10, 64); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return defaultValue
+}
+
+func getBool(key string, defaultValue bool) bool {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		if parsed, err := strconv.ParseBool(value); err == nil {
 			return parsed
 		}
 	}

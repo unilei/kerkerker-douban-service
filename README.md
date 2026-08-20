@@ -257,6 +257,8 @@ CLOUDFLARE_R2_UPLOAD_API_URL=https://example-upload.workers.dev/objects
 CLOUDFLARE_R2_UPLOAD_API_TOKEN=your_upload_token
 CLOUDFLARE_R2_KEY_PREFIX=douban-images
 CLOUDFLARE_R2_MAX_IMAGE_BYTES=10485760
+# 生产环境建议启用；配置不完整时服务直接拒绝启动
+REQUIRE_R2_IMAGE_SYNC=true
 
 # 可选替代方案：直接使用 R2 S3 API 上传
 # 可使用 ACCOUNT_ID 自动生成 Endpoint，也可以直接配置 CLOUDFLARE_R2_ENDPOINT
@@ -318,11 +320,13 @@ curl -H "Authorization: Bearer YOUR_ADMIN_API_KEY" http://localhost:8081/api/v1/
 `.github/workflows/deploy-cn-compliance.yml` 为当前合规分支提供独立流水线。推送到
 `cn-compliance` 后会依次执行格式检查、测试、`go vet` 和构建，发布带提交 SHA 的
 `linux/amd64` GHCR 镜像，再通过 SSH 只重建服务器现有 Compose 项目中的
-`douban-api` 服务。工作流不会上传或覆盖服务器的 `.env`，也不会替换 Redis、Mongo、
-网络和数据卷。
+`douban-api` 服务。工作流不会上传或覆盖服务器的运行时 env-file，也不会替换 Redis、
+Mongo、网络和数据卷；它会通过临时 Compose override 把该 env-file 中的 Mongo 与 R2
+配置传入容器，部署结束后立即删除 override。
 
-部署成功必须同时满足 `/health` 返回成功，以及 `/api/v1/250` 返回完整 250 条数据；
-任一检查失败会把 `latest` 标签和 `douban-api` 容器恢复到部署前镜像。
+部署成功必须同时满足 `/health` 返回成功、`/api/v1/status` 报告 R2 同步和 Mongo 映射
+持久化均已启用，以及 `/api/v1/250` 的 250 张封面全部使用当前 R2 公网前缀。任一检查
+失败都会把 `latest` 标签和 `douban-api` 容器恢复到部署前镜像。
 
 仓库需要配置以下 Actions Secrets：
 
@@ -333,7 +337,9 @@ curl -H "Authorization: Bearer YOUR_ADMIN_API_KEY" http://localhost:8081/api/v1/
 | `DEPLOY_KNOWN_HOSTS` | 预先核验并固定的 SSH 主机指纹 |
 
 仓库 Variables 中的 `DEPLOY_PATH` 必须指向服务器现有 Compose 目录，其中的服务名必须为
-`douban-api`；`DEPLOY_PORT` 是宿主机健康检查端口，默认 `8081`。私有部署仓库可通过
+`douban-api`；`DEPLOY_ENV_FILE` 指向服务器现有运行时配置，默认
+`/opt/kerkerker-douban-service/douban.env`，必须同时包含 `MONGO_URI` 和一组完整 R2 上传
+配置；`DEPLOY_PORT` 是宿主机健康检查端口，默认 `8081`。私有部署仓库可通过
 `IMAGE_NAME` 指定其私有 GHCR 制品名；`DEPLOY_STABLE_IMAGE_NAME` 必须与服务器现有 Compose
 引用的镜像名一致，默认 `ghcr.io/unilei/kerkerker-douban-service`。
 

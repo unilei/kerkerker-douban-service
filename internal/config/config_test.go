@@ -75,3 +75,21 @@ func TestLoadR2ImageConfigEnabledWithUploadWorker(t *testing.T) {
 		t.Fatalf("unexpected upload API token")
 	}
 }
+
+func TestLoadRequiresR2ImageSyncWhenConfigured(t *testing.T) {
+	t.Setenv("REQUIRE_R2_IMAGE_SYNC", "true")
+
+	cfg := Load()
+	if !cfg.RequireR2ImageSync {
+		t.Fatal("expected R2 image sync to be required")
+	}
+}
+
+func TestLoadDoesNotRequireR2ImageSyncByDefault(t *testing.T) {
+	t.Setenv("REQUIRE_R2_IMAGE_SYNC", "")
+
+	cfg := Load()
+	if cfg.RequireR2ImageSync {
+		t.Fatal("expected R2 image sync requirement to be opt-in")
+	}
+}

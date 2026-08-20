@@ -40,6 +40,11 @@ type top250Fallback struct {
 	source  string
 }
 
+type top250ImageSyncJob struct {
+	payload    top250Payload
+	generation uint64
+}
+
 // Top250Handler handles the complete Douban Top 250 ranking.
 type Top250Handler struct {
 	doubanService top250Service
@@ -49,6 +54,8 @@ type Top250Handler struct {
 	imageSyncMu         sync.Mutex
 	imageSyncRunning    bool
 	imageSyncGeneration uint64
+	imageSyncActive     top250ImageSyncJob
+	imageSyncPending    *top250ImageSyncJob
 }
 
 // NewTop250Handler creates a new Top250Handler.
@@ -161,7 +168,8 @@ func (h *Top250Handler) respond(c *gin.Context, payload top250Payload, source st
 
 // scheduleImageSync mirrors all Top 250 covers without making the public
 // request wait for up to 250 downloads/uploads. The generation guard prevents
-// an in-flight job from resurrecting data after an admin cache reset.
+// an in-flight job from resurrecting data after an admin cache reset, while the
+// pending slot keeps the newest payload that arrives before the worker exits.
 func (h *Top250Handler) scheduleImageSync(payload top250Payload) {
 	if !h.doubanService.ImageSyncEnabled() || !top250NeedsImageSync(payload.Subjects) {
 		return
@@ -171,36 +179,68 @@ func (h *Top250Handler) scheduleImageSync(payload top250Payload) {
 	payload.Subjects = append([]model.Subject(nil), payload.Subjects...)
 
 	h.imageSyncMu.Lock()
+	job := top250ImageSyncJob{payload: payload, generation: h.imageSyncGeneration}
 	if h.imageSyncRunning {
+		if top250ImageSyncJobIsNewer(job, h.imageSyncActive) &&
+			(h.imageSyncPending == nil || top250ImageSyncJobIsNewer(job, *h.imageSyncPending)) {
+			pending := job
+			h.imageSyncPending = &pending
+		}
 		h.imageSyncMu.Unlock()
 		return
 	}
 	h.imageSyncRunning = true
-	generation := h.imageSyncGeneration
+	h.imageSyncActive = job
 	h.imageSyncMu.Unlock()
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), top250ImageSyncWindow)
-		defer cancel()
+	go h.runImageSync(job)
+}
 
-		payload.Subjects = h.doubanService.SyncSubjectImages(ctx, payload.Subjects)
+func (h *Top250Handler) runImageSync(job top250ImageSyncJob) {
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), top250ImageSyncWindow)
+		mirrored := job.payload
+		mirrored.Subjects = h.doubanService.SyncSubjectImages(ctx, mirrored.Subjects)
+		h.persistMirroredTop250(ctx, job.generation, mirrored)
+		cancel()
 
 		h.imageSyncMu.Lock()
-		defer h.imageSyncMu.Unlock()
+		if h.imageSyncPending != nil {
+			job = *h.imageSyncPending
+			h.imageSyncPending = nil
+			h.imageSyncActive = job
+			h.imageSyncMu.Unlock()
+			continue
+		}
 		h.imageSyncRunning = false
-		if generation != h.imageSyncGeneration || ctx.Err() != nil || !h.top250PayloadStillCurrent(ctx, payload.FetchedAt) {
-			return
-		}
+		h.imageSyncActive = top250ImageSyncJob{}
+		h.imageSyncMu.Unlock()
+		return
+	}
+}
 
-		if err := h.cache.Set(ctx, top250CacheKey, payload, h.freshnessTTL); err != nil {
-			log.Warn().Err(err).Str("key", top250CacheKey).Msg("Failed to persist mirrored Top 250 images in Redis")
+func (h *Top250Handler) persistMirroredTop250(ctx context.Context, generation uint64, payload top250Payload) {
+	h.imageSyncMu.Lock()
+	defer h.imageSyncMu.Unlock()
+	if generation != h.imageSyncGeneration || ctx.Err() != nil || !h.top250PayloadStillCurrent(ctx, payload.FetchedAt) {
+		return
+	}
+
+	if err := h.cache.Set(ctx, top250CacheKey, payload, h.freshnessTTL); err != nil {
+		log.Warn().Err(err).Str("key", top250CacheKey).Msg("Failed to persist mirrored Top 250 images in Redis")
+	}
+	if snapshotStore := h.doubanService.SnapshotStore(); snapshotStore != nil {
+		if err := snapshotStore.Store(ctx, top250CacheKey, payload); err != nil {
+			log.Warn().Err(err).Str("key", top250CacheKey).Msg("Failed to persist mirrored Top 250 images in Mongo")
 		}
-		if snapshotStore := h.doubanService.SnapshotStore(); snapshotStore != nil {
-			if err := snapshotStore.Store(ctx, top250CacheKey, payload); err != nil {
-				log.Warn().Err(err).Str("key", top250CacheKey).Msg("Failed to persist mirrored Top 250 images in Mongo")
-			}
-		}
-	}()
+	}
+}
+
+func top250ImageSyncJobIsNewer(candidate, current top250ImageSyncJob) bool {
+	if candidate.generation != current.generation {
+		return candidate.generation > current.generation
+	}
+	return candidate.payload.FetchedAt.After(current.payload.FetchedAt)
 }
 
 func (h *Top250Handler) top250PayloadStillCurrent(ctx context.Context, fetchedAt time.Time) bool {
@@ -268,6 +308,7 @@ func newerTop250Fallback(current *top250Fallback, candidate top250Payload, sourc
 func (h *Top250Handler) DeleteTop250Cache(c *gin.Context) {
 	h.imageSyncMu.Lock()
 	h.imageSyncGeneration++
+	h.imageSyncPending = nil
 	h.imageSyncMu.Unlock()
 
 	ctx := c.Request.Context()

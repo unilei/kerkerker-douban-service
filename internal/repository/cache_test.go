@@ -48,3 +48,27 @@ func TestSetKeepTTLPreservesExistingExpiration(t *testing.T) {
 		t.Fatalf("expected rewritten cache value, got %q", got["cover"])
 	}
 }
+
+func TestSetKeepTTLDoesNotRecreateExpiredKey(t *testing.T) {
+	redisServer := miniredis.RunT(t)
+	cache, err := NewCache("redis://"+redisServer.Addr(), time.Hour)
+	if err != nil {
+		t.Fatalf("create cache: %v", err)
+	}
+	defer cache.Close()
+
+	ctx := context.Background()
+	const key = "douban:calendar:expired"
+	if err := cache.Set(ctx, key, map[string]string{"poster": "douban"}, time.Minute); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+	redisServer.FastForward(2 * time.Minute)
+
+	if err := cache.SetKeepTTL(ctx, key, map[string]string{"poster": "r2"}); err != nil {
+		t.Fatalf("rewrite expired cache: %v", err)
+	}
+	var got map[string]string
+	if err := cache.Get(ctx, key, &got); !IsCacheMiss(err) {
+		t.Fatalf("expected expired key to remain absent, got value=%v err=%v", got, err)
+	}
+}

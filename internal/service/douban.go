@@ -500,6 +500,11 @@ func (s *DoubanService) ImageSyncEnabled() bool {
 	return s != nil && s.imageSyncer != nil && s.imageSyncer.Enabled()
 }
 
+// ImageMappingPersistenceEnabled returns true when R2 mappings are stored durably.
+func (s *DoubanService) ImageMappingPersistenceEnabled() bool {
+	return s != nil && s.imageSyncer != nil && s.imageSyncer.PersistentMappingEnabled()
+}
+
 // SyncSubjectImages rewrites Subject image fields to R2 URLs when enabled.
 func (s *DoubanService) SyncSubjectImages(ctx context.Context, subjects []model.Subject) []model.Subject {
 	if !s.ImageSyncEnabled() {

@@ -36,6 +36,9 @@ func main() {
 	flag.Parse()
 
 	cfg := config.Load()
+	if cfg.RequireR2ImageSync && !cfg.R2Images.Enabled {
+		log.Fatal().Msg("REQUIRE_R2_IMAGE_SYNC is enabled, but Cloudflare R2 image configuration is incomplete")
+	}
 	log.Info().
 		Str("db", cfg.MongoDBName).
 		Dur("max-age", *maxAge).

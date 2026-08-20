@@ -364,6 +364,68 @@ func TestTop250HandlerDeletePreventsBackgroundImageResurrection(t *testing.T) {
 	}
 }
 
+func TestTop250HandlerDeleteThenGetContinuesImageSyncForNewGeneration(t *testing.T) {
+	snapshot := &fakeTop250SnapshotStore{loadErr: repository.ErrSnapshotNotFound}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	service := &fakeTop250Service{
+		subjects:      validTop250Subjects("https://img3.doubanio.com"),
+		imageSync:     true,
+		snapshotStore: snapshot,
+		syncStarted:   started,
+		syncRelease:   release,
+	}
+	handler, cache, cleanup := newTop250TestHandler(t, service)
+	defer cleanup()
+
+	if response := performTop250Request(handler); response.Code != http.StatusOK {
+		t.Fatalf("seed request failed: %d: %s", response.Code, response.Body.String())
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("background image sync did not start")
+	}
+
+	if response := performTop250DeleteRequest(handler); response.Code != http.StatusOK {
+		t.Fatalf("delete failed: %d: %s", response.Code, response.Body.String())
+	}
+	response := performTop250Request(handler)
+	body := decodeTop250Response(t, response)
+	if response.Code != http.StatusOK || !strings.Contains(body.Data.Subjects[0].Cover, "doubanio.com") {
+		t.Fatalf("new generation request should return before image sync: %d: %s", response.Code, response.Body.String())
+	}
+
+	handler.imageSyncMu.Lock()
+	pendingGeneration := uint64(0)
+	if handler.imageSyncPending != nil {
+		pendingGeneration = handler.imageSyncPending.generation
+	}
+	generation := handler.imageSyncGeneration
+	handler.imageSyncMu.Unlock()
+	if pendingGeneration != generation {
+		t.Fatalf("new generation image sync was not queued: generation=%d pending=%d", generation, pendingGeneration)
+	}
+
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var cached top250Payload
+		cacheErr := cache.Get(context.Background(), top250CacheKey, &cached)
+		fetchCalls, syncCalls := service.callCounts()
+		handler.imageSyncMu.Lock()
+		running := handler.imageSyncRunning
+		handler.imageSyncMu.Unlock()
+		if cacheErr == nil && strings.Contains(cached.Subjects[0].Cover, "r2.example.com") && fetchCalls == 2 && syncCalls == 2 && !running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("new generation image sync did not finish: cacheErr=%v fetch=%d sync=%d running=%t", cacheErr, fetchCalls, syncCalls, running)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 type top250TestResponse struct {
 	Code   int           `json:"code"`
 	Data   top250Payload `json:"data"`

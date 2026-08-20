@@ -9,6 +9,8 @@ services:
       - PORT=8080
       - GIN_MODE=release
       - REDIS_URL=redis://redis:6379
+      - MONGO_URI=${MONGO_URI:-}
+      - MONGO_DB_NAME=${MONGO_DB_NAME:-kerkerker_douban}
       - DOUBAN_API_PROXY=${DOUBAN_API_PROXY:-}
       - TMDB_API_KEY=${TMDB_API_KEY:-}
       - TMDB_BASE_URL=${TMDB_BASE_URL:-https://api.themoviedb.org/3}
@@ -23,6 +25,7 @@ services:
       - CLOUDFLARE_R2_UPLOAD_API_TOKEN=${CLOUDFLARE_R2_UPLOAD_API_TOKEN:-}
       - CLOUDFLARE_R2_KEY_PREFIX=${CLOUDFLARE_R2_KEY_PREFIX:-douban-images}
       - CLOUDFLARE_R2_MAX_IMAGE_BYTES=${CLOUDFLARE_R2_MAX_IMAGE_BYTES:-10485760}
+      - REQUIRE_R2_IMAGE_SYNC=${REQUIRE_R2_IMAGE_SYNC:-false}
       - ADMIN_API_KEY=${ADMIN_API_KEY:-}
     depends_on:
       - redis

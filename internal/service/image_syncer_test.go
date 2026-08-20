@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"kerkerker-douban-service/internal/model"
@@ -11,11 +12,14 @@ import (
 
 type fakeImageFetcher struct {
 	images map[string]FetchedImage
+	mu     sync.Mutex
 	calls  int
 }
 
 func (f *fakeImageFetcher) FetchImage(ctx context.Context, imageURL string, maxBytes int64) (FetchedImage, error) {
+	f.mu.Lock()
 	f.calls++
+	f.mu.Unlock()
 	image, ok := f.images[imageURL]
 	if !ok {
 		return FetchedImage{}, errors.New("missing image")
@@ -24,14 +28,27 @@ func (f *fakeImageFetcher) FetchImage(ctx context.Context, imageURL string, maxB
 }
 
 type fakeObjectStore struct {
+	mu   sync.Mutex
 	puts []StoredObject
 	err  error
 }
+
+type fakeImageMapStore struct{}
+
+func (fakeImageMapStore) Get(context.Context, string) (string, error) {
+	return "", errors.New("not found")
+}
+
+func (fakeImageMapStore) Put(context.Context, string, string) error { return nil }
+
+func (fakeImageMapStore) Close(context.Context) error { return nil }
 
 func (s *fakeObjectStore) PutObject(ctx context.Context, object StoredObject) error {
 	if s.err != nil {
 		return s.err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.puts = append(s.puts, object)
 	return nil
 }
@@ -68,6 +85,21 @@ func TestImageSyncerUploadsDoubanImageAndReturnsPublicR2URL(t *testing.T) {
 	}
 	if string(store.puts[0].Body) != "fake-jpeg" {
 		t.Fatalf("unexpected uploaded body: %q", string(store.puts[0].Body))
+	}
+}
+
+func TestImageSyncerReportsPersistentMappingState(t *testing.T) {
+	syncer := NewImageSyncer(ImageSyncerConfig{
+		Enabled:       true,
+		PublicBaseURL: "https://img.example.com",
+	}, &fakeImageFetcher{}, &fakeObjectStore{})
+
+	if syncer.PersistentMappingEnabled() {
+		t.Fatal("mapping persistence should be disabled without a map store")
+	}
+	syncer.SetMapStore(fakeImageMapStore{})
+	if !syncer.PersistentMappingEnabled() {
+		t.Fatal("mapping persistence should be enabled after a map store is attached")
 	}
 }
 

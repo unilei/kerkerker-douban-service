@@ -106,6 +106,11 @@ func (s *ImageSyncer) Enabled() bool {
 		s.store != nil
 }
 
+// PersistentMappingEnabled reports whether successful mirrors survive process restarts.
+func (s *ImageSyncer) PersistentMappingEnabled() bool {
+	return s != nil && s.mapStore != nil
+}
+
 // SyncURL mirrors a Douban/TMDB image URL to R2. It returns the original URL on any failure.
 func (s *ImageSyncer) SyncURL(ctx context.Context, rawURL string) string {
 	if !s.Enabled() {

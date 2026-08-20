@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -78,14 +79,17 @@ func (c *Cache) Set(ctx context.Context, key string, value interface{}, ttl ...t
 	return nil
 }
 
-// SetKeepTTL replaces a cached value without changing its existing expiration.
+// SetKeepTTL replaces an existing cached value without changing its expiration.
+// If the key expires before this write, it remains absent.
 func (c *Cache) SetKeepTTL(ctx context.Context, key string, value interface{}) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("failed to marshal value: %w", err)
 	}
 
-	if err := c.client.SetArgs(ctx, key, data, redis.SetArgs{KeepTTL: true}).Err(); err != nil {
+	if err := c.client.SetArgs(ctx, key, data, redis.SetArgs{KeepTTL: true, Mode: "XX"}).Err(); errors.Is(err, redis.Nil) {
+		return nil
+	} else if err != nil {
 		return fmt.Errorf("redis set keep ttl error: %w", err)
 	}
 

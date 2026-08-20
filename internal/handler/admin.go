@@ -30,11 +30,12 @@ func NewAdminHandler(douban *service.DoubanService, tmdb *service.TMDBService, m
 // GET /api/v1/status
 func (h *AdminHandler) GetStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-		"status":                "ok",
-		"proxy_enabled":         h.doubanService.HasProxy(),
-		"proxy_count":           h.doubanService.ProxyCount(),
-		"r2_image_sync_enabled": h.doubanService.ImageSyncEnabled(),
-		"tmdb_enabled":          h.tmdbService.IsConfigured(),
+		"status":                      "ok",
+		"proxy_enabled":               h.doubanService.HasProxy(),
+		"proxy_count":                 h.doubanService.ProxyCount(),
+		"r2_image_sync_enabled":       h.doubanService.ImageSyncEnabled(),
+		"r2_image_mapping_persistent": h.doubanService.ImageMappingPersistenceEnabled(),
+		"tmdb_enabled":                h.tmdbService.IsConfigured(),
 	})
 }
 

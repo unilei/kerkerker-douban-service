@@ -23,6 +23,7 @@ env:
   IMAGE_NAME: ${{ vars.IMAGE_NAME || format('ghcr.io/{0}', github.repository) }}
   STABLE_IMAGE_NAME: ${{ vars.DEPLOY_STABLE_IMAGE_NAME || 'ghcr.io/unilei/kerkerker-douban-service' }}
   DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/www/wwwroot/kerkerker-douban-service' }}
+  DEPLOY_ENV_FILE: ${{ vars.DEPLOY_ENV_FILE || '/opt/kerkerker-douban-service/douban.env' }}
   SERVICE_PORT: ${{ vars.DEPLOY_PORT || '8081' }}
 
 jobs:
@@ -136,6 +137,7 @@ jobs:
           [[ "$DEPLOY_HOST" != *$'\n'* ]] || { echo "DEPLOY_HOST contains a newline" >&2; exit 1; }
           [[ "$DEPLOY_USER" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] || { echo "Invalid DEPLOY_USER" >&2; exit 1; }
           [[ "$DEPLOY_PATH" =~ ^/[A-Za-z0-9_./-]+$ ]] || { echo "Invalid DEPLOY_PATH" >&2; exit 1; }
+          [[ "$DEPLOY_ENV_FILE" =~ ^/[A-Za-z0-9_./-]+$ ]] || { echo "Invalid DEPLOY_ENV_FILE" >&2; exit 1; }
           [[ "$SERVICE_PORT" =~ ^[0-9]+$ ]] && (( SERVICE_PORT >= 1 && SERVICE_PORT <= 65535 )) || { echo "Invalid DEPLOY_PORT" >&2; exit 1; }
 
       - name: Prepare SSH
@@ -181,7 +183,7 @@ jobs:
           set -euo pipefail
           ssh -i "$KEY_FILE" -o BatchMode=yes -o UserKnownHostsFile="$KNOWN_HOSTS" \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "DEPLOY_PATH='$DEPLOY_PATH' SERVICE_PORT='$SERVICE_PORT' IMAGE_NAME='$IMAGE_NAME' STABLE_IMAGE_NAME='$STABLE_IMAGE_NAME' IMAGE_TAG='$IMAGE_TAG' bash -s" <<'REMOTE'
+            "DEPLOY_PATH='$DEPLOY_PATH' DEPLOY_ENV_FILE='$DEPLOY_ENV_FILE' SERVICE_PORT='$SERVICE_PORT' IMAGE_NAME='$IMAGE_NAME' STABLE_IMAGE_NAME='$STABLE_IMAGE_NAME' IMAGE_TAG='$IMAGE_TAG' bash -s" <<'REMOTE'
           set -euo pipefail
           cd "$DEPLOY_PATH"
 
@@ -193,8 +195,46 @@ jobs:
             fi
           done
           [ -n "$compose_file" ] || { echo "No Compose file found in $DEPLOY_PATH" >&2; exit 1; }
+          [ -f "$DEPLOY_ENV_FILE" ] || { echo "Server deployment environment file is missing" >&2; exit 1; }
 
-          project=(docker compose -f "$compose_file")
+          # Production started with a legacy Compose file that does not declare
+          # the persistence and image-mirroring variables. Keep the dedicated
+          # server env file as the source of truth and layer it over either the
+          # legacy file or the current repository Compose file.
+          umask 077
+          override_file="$(mktemp "$DEPLOY_PATH/.deploy-cn-compliance.XXXXXX.yml")"
+          cat > "$override_file" <<'OVERRIDE'
+          services:
+            douban-api:
+              env_file:
+                - "${DEPLOY_ENV_FILE}"
+              environment:
+                MONGO_URI: "${MONGO_URI:-}"
+                MONGO_DB_NAME: "${MONGO_DB_NAME:-kerkerker_douban}"
+                CLOUDFLARE_R2_ACCOUNT_ID: "${CLOUDFLARE_R2_ACCOUNT_ID:-}"
+                CLOUDFLARE_R2_ENDPOINT: "${CLOUDFLARE_R2_ENDPOINT:-}"
+                CLOUDFLARE_R2_ACCESS_KEY_ID: "${CLOUDFLARE_R2_ACCESS_KEY_ID:-}"
+                CLOUDFLARE_R2_SECRET_ACCESS_KEY: "${CLOUDFLARE_R2_SECRET_ACCESS_KEY:-}"
+                CLOUDFLARE_R2_BUCKET: "${CLOUDFLARE_R2_BUCKET:-}"
+                CLOUDFLARE_R2_PUBLIC_URL: "${CLOUDFLARE_R2_PUBLIC_URL:-}"
+                CLOUDFLARE_R2_UPLOAD_API_URL: "${CLOUDFLARE_R2_UPLOAD_API_URL:-}"
+                CLOUDFLARE_R2_UPLOAD_API_TOKEN: "${CLOUDFLARE_R2_UPLOAD_API_TOKEN:-}"
+                CLOUDFLARE_R2_KEY_PREFIX: "${CLOUDFLARE_R2_KEY_PREFIX:-douban-images}"
+                CLOUDFLARE_R2_MAX_IMAGE_BYTES: "${CLOUDFLARE_R2_MAX_IMAGE_BYTES:-10485760}"
+                R2_ACCOUNT_ID: "${R2_ACCOUNT_ID:-}"
+                R2_ENDPOINT: "${R2_ENDPOINT:-}"
+                R2_ACCESS_KEY_ID: "${R2_ACCESS_KEY_ID:-}"
+                R2_SECRET_ACCESS_KEY: "${R2_SECRET_ACCESS_KEY:-}"
+                R2_BUCKET: "${R2_BUCKET:-}"
+                R2_PUBLIC_URL: "${R2_PUBLIC_URL:-}"
+                REQUIRE_R2_IMAGE_SYNC: "true"
+          OVERRIDE
+
+          project=(docker compose --env-file "$DEPLOY_ENV_FILE" -f "$compose_file" -f "$override_file")
+          cleanup() {
+            rm -f "$override_file"
+          }
+          trap cleanup EXIT
           "${project[@]}" config --services | grep -Fxq douban-api || {
             echo "Compose project does not contain the douban-api service" >&2
             exit 1
@@ -205,6 +245,9 @@ jobs:
           app_container_name="kerkerker-douban-service"
           legacy_backup=""
           previous_image_id="$(docker image inspect "$stable_image" --format '{{.Id}}' 2>/dev/null || true)"
+          if [ -z "$previous_image_id" ] && docker container inspect "$app_container_name" >/dev/null 2>&1; then
+            previous_image_id="$(docker container inspect "$app_container_name" --format '{{.Image}}')"
+          fi
           rollback() {
             echo "Deployment failed; restoring previous image" >&2
             if [ -n "$legacy_backup" ] && docker container inspect "$legacy_backup" >/dev/null 2>&1; then
@@ -216,12 +259,27 @@ jobs:
             if [ -n "$previous_image_id" ]; then
               docker tag "$previous_image_id" "$stable_image"
               "${project[@]}" up -d --no-deps --no-build --force-recreate douban-api || true
+              return
             fi
+            "${project[@]}" rm -sf douban-api || true
           }
-          trap rollback ERR
+          deployment_succeeded=false
+          rollout_started=false
+          finish() {
+            exit_status=$?
+            trap - EXIT
+            if [ "$deployment_succeeded" != true ] && [ "$rollout_started" = true ]; then
+              set +e
+              rollback
+            fi
+            cleanup
+            exit "$exit_status"
+          }
+          trap finish EXIT
 
           docker pull "$release_image"
           docker tag "$release_image" "$stable_image"
+          rollout_started=true
 
           # The existing production container predates Compose ownership. Keep it
           # intact until the first Compose-managed replacement passes smoke tests.
@@ -253,22 +311,65 @@ jobs:
             sleep 3
           done
 
-          response="$(curl --fail --silent --show-error --max-time 30 "http://127.0.0.1:${SERVICE_PORT}/api/v1/250")"
-          [[ "$response" == *'"code":200'* ]] || {
-            echo "Top 250 smoke test did not return code 200" >&2
+          r2_public_url="$(docker exec "$app_container_name" sh -c \
+            'printf %s "${CLOUDFLARE_R2_PUBLIC_URL:-$R2_PUBLIC_URL}"')"
+          [ -n "$r2_public_url" ] || {
+            echo "R2 public URL is not configured in the deployed container" >&2
             exit 1
           }
-          subject_count="$(printf '%s' "$response" | grep -o '"id":"[^"]*"' | wc -l | tr -d '[:space:]')"
-          [ "$subject_count" -eq 250 ] || {
-            echo "Top 250 smoke test returned $subject_count items instead of 250" >&2
+          while [ "${r2_public_url%/}" != "$r2_public_url" ]; do
+            r2_public_url="${r2_public_url%/}"
+          done
+
+          status_response="$(curl --fail --silent --show-error --max-time 10 \
+            "http://127.0.0.1:${SERVICE_PORT}/api/v1/status")"
+          printf '%s' "$status_response" | grep -Eq '"r2_image_sync_enabled"[[:space:]]*:[[:space:]]*true' || {
+            echo "R2 image synchronization is not enabled" >&2
+            exit 1
+          }
+          printf '%s' "$status_response" | grep -Eq '"r2_image_mapping_persistent"[[:space:]]*:[[:space:]]*true' || {
+            echo "R2 image mapping persistence is not enabled" >&2
+            exit 1
+          }
+
+          # The first request can start the asynchronous Top 250 image mirror.
+          # Poll the cached result until every cover points at this deployment's
+          # configured R2 public prefix. Never print the prefix or response body.
+          synced_cover_count=0
+          for attempt in $(seq 1 200); do
+            response="$(curl --fail --silent --show-error --max-time 30 \
+              "http://127.0.0.1:${SERVICE_PORT}/api/v1/250")"
+            printf '%s' "$response" | grep -Eq '"code"[[:space:]]*:[[:space:]]*200' || {
+              echo "Top 250 smoke test did not return code 200" >&2
+              exit 1
+            }
+            subject_count="$(printf '%s' "$response" | grep -o '"id":"[^"]*"' | wc -l | tr -d '[:space:]')"
+            cover_values="$(printf '%s' "$response" | grep -o '"cover":"[^"]*"' | sed 's/^"cover":"//; s/"$//' || true)"
+            cover_count="$(printf '%s\n' "$cover_values" | awk 'NF { count++ } END { print count + 0 }')"
+            [ "$subject_count" -eq 250 ] && [ "$cover_count" -eq 250 ] || {
+              echo "Top 250 smoke test returned $subject_count items and $cover_count covers" >&2
+              exit 1
+            }
+            synced_cover_count="$(printf '%s\n' "$cover_values" | awk -v prefix="${r2_public_url}/" \
+              'index($0, prefix) == 1 { count++ } END { print count + 0 }')"
+            if [ "$synced_cover_count" -eq 250 ]; then
+              break
+            fi
+            if [ "$attempt" -eq 1 ] || [ $((attempt % 12)) -eq 0 ]; then
+              echo "Top 250 R2 image sync progress: ${synced_cover_count}/250"
+            fi
+            [ "$attempt" -lt 200 ] && sleep 5
+          done
+          [ "$synced_cover_count" -eq 250 ] || {
+            echo "Top 250 R2 image sync timed out at ${synced_cover_count}/250" >&2
             exit 1
           }
 
           if [ -n "$legacy_backup" ]; then
             docker rm "$legacy_backup"
           fi
-          trap - ERR
-          echo "Douban service deployment healthy on port ${SERVICE_PORT}; Top 250 contains 250 items"
+          deployment_succeeded=true
+          echo "Douban service deployment healthy on port ${SERVICE_PORT}; R2 image sync is enabled and Top 250 covers are 250/250"
           REMOTE
 
       - name: Deployment summary

@@ -27,6 +27,9 @@ func main() {
 
 	// Load configuration
 	cfg := config.Load()
+	if cfg.RequireR2ImageSync && !cfg.R2Images.Enabled {
+		log.Fatal().Msg("REQUIRE_R2_IMAGE_SYNC is enabled, but Cloudflare R2 image configuration is incomplete")
+	}
 	log.Info().
 		Str("port", cfg.Port).
 		Str("mode", cfg.GinMode).

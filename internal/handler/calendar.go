@@ -100,6 +100,10 @@ func (h *CalendarHandler) GetCalendar(c *gin.Context) {
 	// Check cache
 	var cachedData model.CalendarResponse
 	if err := h.cache.Get(ctx, cacheKey, &cachedData); err == nil {
+		cachedData.Days = h.doubanService.SyncCalendarImages(ctx, cachedData.Days)
+		if h.doubanService.ImageSyncEnabled() {
+			h.cache.SetKeepTTL(ctx, cacheKey, cachedData)
+		}
 		c.Set("cache_source", "redis-cache")
 		c.JSON(http.StatusOK, model.APIResponse{
 			Code:   200,
@@ -193,6 +197,10 @@ func (h *CalendarHandler) GetAiring(c *gin.Context) {
 	// Check cache
 	var cachedData []model.CalendarEntry
 	if err := h.cache.Get(ctx, cacheKey, &cachedData); err == nil {
+		cachedData = h.doubanService.SyncCalendarEntriesImages(ctx, cachedData)
+		if h.doubanService.ImageSyncEnabled() {
+			h.cache.SetKeepTTL(ctx, cacheKey, cachedData)
+		}
 		c.Set("cache_source", "redis-cache")
 		c.JSON(http.StatusOK, model.APIResponse{
 			Code:   200,
