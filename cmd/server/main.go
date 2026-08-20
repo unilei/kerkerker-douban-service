@@ -138,6 +138,7 @@ func main() {
 	tvHandler := handler.NewTVHandler(doubanService, cache)
 	newHandler := handler.NewNewHandler(doubanService, cache)
 	searchHandler := handler.NewSearchHandler(doubanService, cache)
+	top250Handler := handler.NewTop250Handler(doubanService, cache, cfg.CacheTTLCategory)
 	adminHandler := handler.NewAdminHandler(doubanService, tmdbService, metrics)
 	calendarHandler := handler.NewCalendarHandler(tmdbService, doubanService, cache, cfg.CacheTTLCategory)
 
@@ -176,6 +177,7 @@ func main() {
 		api.GET("/new", newHandler.GetNew)
 		api.GET("/search", searchHandler.Search)
 		api.POST("/search", searchHandler.GetSearchTags)
+		api.GET("/250", top250Handler.GetTop250)
 
 		// 日历接口
 		api.GET("/calendar", calendarHandler.GetCalendar)
@@ -201,6 +203,7 @@ func main() {
 		admin.DELETE("/tv", tvHandler.DeleteTVCache)
 		admin.DELETE("/new", newHandler.DeleteNewCache)
 		admin.DELETE("/search", searchHandler.DeleteSearchCache)
+		admin.DELETE("/250", top250Handler.DeleteTop250Cache)
 		admin.DELETE("/calendar", calendarHandler.DeleteCalendarCache)
 	}
 

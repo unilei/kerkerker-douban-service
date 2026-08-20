@@ -14,9 +14,9 @@ import (
 // Snapshot 是 snapshots 集合的文档，用于持久化任意列表/聚合型快照（category/hero/latest 等）。
 // payload 用 bson.M / 任意 JSON 可序列化结构存储，由调用方解释其含义。
 type Snapshot struct {
-	Key        string    `bson:"_id"`     // 稳定逻辑键，例如 "douban:category:hot_movies:page1:limit20"
-	Payload    any       `bson:"payload"` // 快照内容
-	UpdatedAt  time.Time `bson:"updated_at"`
+	Key       string    `bson:"_id"`     // 稳定逻辑键，例如 "douban:category:hot_movies:page1:limit20"
+	Payload   any       `bson:"payload"` // 快照内容
+	UpdatedAt time.Time `bson:"updated_at"`
 }
 
 // ErrSnapshotNotFound 表示某快照键尚不存在。
@@ -28,6 +28,8 @@ type SnapshotStore interface {
 	Load(ctx context.Context, key string, dest any) error
 	// Store 用 upsert 写入 key 的快照（覆盖旧 payload）。
 	Store(ctx context.Context, key string, payload any) error
+	// Delete 删除指定快照。键不存在时也视为成功。
+	Delete(ctx context.Context, key string) error
 }
 
 type mongoSnapshotStore struct {
@@ -68,6 +70,13 @@ func (s *mongoSnapshotStore) Store(ctx context.Context, key string, payload any)
 	}
 	if _, err := s.coll.UpdateOne(ctx, filter, update, options.UpdateOne().SetUpsert(true)); err != nil {
 		return fmt.Errorf("store snapshot: %w", err)
+	}
+	return nil
+}
+
+func (s *mongoSnapshotStore) Delete(ctx context.Context, key string) error {
+	if _, err := s.coll.DeleteOne(ctx, bson.D{{Key: "_id", Value: key}}); err != nil {
+		return fmt.Errorf("delete snapshot: %w", err)
 	}
 	return nil
 }

@@ -1,0 +1,246 @@
+name: Deploy Douban Service (cn-compliance)
+
+on:
+  push:
+    branches:
+      - cn-compliance
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Optional image tag (defaults to the commit SHA)"
+        required: false
+        type: string
+
+concurrency:
+  group: kerkerker-douban-cn-compliance-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ${{ vars.IMAGE_NAME || format('ghcr.io/{0}', github.repository) }}
+  STABLE_IMAGE_NAME: ${{ vars.DEPLOY_STABLE_IMAGE_NAME || 'ghcr.io/unilei/kerkerker-douban-service' }}
+  DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/www/wwwroot/kerkerker-douban-service' }}
+  SERVICE_PORT: ${{ vars.DEPLOY_PORT || '8081' }}
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.6"
+          cache: true
+
+      - name: Verify formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t go_files < <(git ls-files '*.go')
+          unformatted="$(gofmt -l "${go_files[@]}")"
+          if [[ -n "$unformatted" ]]; then
+            printf 'Files require gofmt:\n%s\n' "$unformatted" >&2
+            exit 1
+          fi
+
+      - name: Test
+        run: go test ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Check known vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+
+      - name: Build
+        run: go build ./...
+
+  publish:
+    name: Build and publish Docker image
+    needs: verify
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.image.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Resolve image tag
+        id: image
+        env:
+          INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${INPUT_IMAGE_TAG:-${GITHUB_SHA}}"
+          if [[ ! "$tag" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "Invalid image tag" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ steps.image.outputs.tag }}
+            ${{ env.IMAGE_NAME }}:cn-compliance-latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+  deploy:
+    name: Deploy to existing Docker VPS
+    needs: publish
+    if: github.repository_owner == 'unilei'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate deployment configuration
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS; do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing required repository secret: $name" >&2
+              exit 1
+            fi
+          done
+          [[ "$DEPLOY_HOST" != *$'\n'* ]] || { echo "DEPLOY_HOST contains a newline" >&2; exit 1; }
+          [[ "$DEPLOY_USER" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] || { echo "Invalid DEPLOY_USER" >&2; exit 1; }
+          [[ "$DEPLOY_PATH" =~ ^/[A-Za-z0-9_./-]+$ ]] || { echo "Invalid DEPLOY_PATH" >&2; exit 1; }
+          [[ "$SERVICE_PORT" =~ ^[0-9]+$ ]] && (( SERVICE_PORT >= 1 && SERVICE_PORT <= 65535 )) || { echo "Invalid DEPLOY_PORT" >&2; exit 1; }
+
+      - name: Prepare SSH
+        id: ssh
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          key_file="$RUNNER_TEMP/douban_deploy_key"
+          known_hosts="$RUNNER_TEMP/douban_known_hosts"
+          umask 077
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$key_file"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$known_hosts"
+          test -s "$known_hosts"
+          echo "key_file=$key_file" >> "$GITHUB_OUTPUT"
+          echo "known_hosts=$known_hosts" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR on VPS
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
+          KEY_FILE: ${{ steps.ssh.outputs.key_file }}
+          KNOWN_HOSTS: ${{ steps.ssh.outputs.known_hosts }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | ssh -i "$KEY_FILE" -o BatchMode=yes -o UserKnownHostsFile="$KNOWN_HOSTS" \
+            "$DEPLOY_USER@$DEPLOY_HOST" "docker login ghcr.io -u '$GHCR_USER' --password-stdin"
+
+      - name: Roll out and verify
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          IMAGE_TAG: ${{ needs.publish.outputs.image_tag }}
+          KEY_FILE: ${{ steps.ssh.outputs.key_file }}
+          KNOWN_HOSTS: ${{ steps.ssh.outputs.known_hosts }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i "$KEY_FILE" -o BatchMode=yes -o UserKnownHostsFile="$KNOWN_HOSTS" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' SERVICE_PORT='$SERVICE_PORT' IMAGE_NAME='$IMAGE_NAME' STABLE_IMAGE_NAME='$STABLE_IMAGE_NAME' IMAGE_TAG='$IMAGE_TAG' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+
+          compose_file=""
+          for candidate in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
+            if [ -f "$candidate" ]; then
+              compose_file="$candidate"
+              break
+            fi
+          done
+          [ -n "$compose_file" ] || { echo "No Compose file found in $DEPLOY_PATH" >&2; exit 1; }
+
+          project=(docker compose -f "$compose_file")
+          "${project[@]}" config --services | grep -Fxq douban-api || {
+            echo "Compose project does not contain the douban-api service" >&2
+            exit 1
+          }
+
+          stable_image="${STABLE_IMAGE_NAME}:latest"
+          release_image="${IMAGE_NAME}:${IMAGE_TAG}"
+          previous_image_id="$(docker image inspect "$stable_image" --format '{{.Id}}' 2>/dev/null || true)"
+          rollback() {
+            echo "Deployment failed; restoring previous image" >&2
+            if [ -n "$previous_image_id" ]; then
+              docker tag "$previous_image_id" "$stable_image"
+              "${project[@]}" up -d --no-build --force-recreate douban-api || true
+            fi
+          }
+          trap rollback ERR
+
+          docker pull "$release_image"
+          docker tag "$release_image" "$stable_image"
+          "${project[@]}" up -d --no-build --force-recreate douban-api
+
+          for attempt in $(seq 1 40); do
+            if curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:${SERVICE_PORT}/health" >/dev/null; then
+              break
+            fi
+            [ "$attempt" -eq 40 ] && { echo "Douban service health check failed" >&2; exit 1; }
+            sleep 3
+          done
+
+          response="$(curl --fail --silent --show-error --max-time 30 "http://127.0.0.1:${SERVICE_PORT}/api/v1/250")"
+          [[ "$response" == *'"code":200'* ]] || {
+            echo "Top 250 smoke test did not return code 200" >&2
+            exit 1
+          }
+          subject_count="$(printf '%s' "$response" | grep -o '"id":"[^"]*"' | wc -l | tr -d '[:space:]')"
+          [ "$subject_count" -eq 250 ] || {
+            echo "Top 250 smoke test returned $subject_count items instead of 250" >&2
+            exit 1
+          }
+
+          trap - ERR
+          echo "Douban service deployment healthy on port ${SERVICE_PORT}; Top 250 contains 250 items"
+          REMOTE
+
+      - name: Deployment summary
+        run: |
+          echo "Deployed ${IMAGE_NAME}:${{ needs.publish.outputs.image_tag }} from ${GITHUB_REF_NAME}"
+          echo "Server path: ${DEPLOY_PATH}"
+          echo "Server port: ${SERVICE_PORT}"

@@ -937,6 +937,12 @@
               </button>
               <button
                 class="btn btn-secondary cache-btn"
+                onclick="clearCache('250')"
+              >
+                🏆 豆瓣 Top 250
+              </button>
+              <button
+                class="btn btn-secondary cache-btn"
                 onclick="clearCache('detail')"
               >
                 🎞️ 影片详情
@@ -1011,6 +1017,12 @@
           path: "/api/v1/category?category=hot_movies&page=1",
           method: "GET",
           desc: "分类分页数据",
+        },
+        {
+          name: "豆瓣 Top 250",
+          path: "/api/v1/250",
+          method: "GET",
+          desc: "完整 Top 250 榜单",
         },
         {
           name: "影片详情",
@@ -1430,6 +1442,7 @@
         const types = [
           "hero",
           "category",
+          "250",
           "detail",
           "latest",
           "movies",

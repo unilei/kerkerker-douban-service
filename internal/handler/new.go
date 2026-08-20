@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,35 +51,58 @@ func (h *NewHandler) GetNew(c *gin.Context) {
 	year := c.Query("year")
 	region := c.Query("region")
 	genre := c.Query("genre")
-	sort := c.DefaultQuery("sort", "recommend")
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "30"))
+	sort, sortProvided := c.GetQuery("sort")
+	if strings.TrimSpace(sort) == "" {
+		sort = "recommend"
+	}
+	page, pageErr := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, pageSizeErr := strconv.Atoi(c.DefaultQuery("pageSize", "30"))
+	if pageErr != nil || page < 1 || page > 10_000 || pageSizeErr != nil || pageSize < 1 || pageSize > 100 {
+		c.JSON(http.StatusBadRequest, model.APIResponse{
+			Code:  http.StatusBadRequest,
+			Error: "page 必须为 1-10000，pageSize 必须为 1-100",
+		})
+		return
+	}
 
-	hasFilters := typ != "" || year != "" || region != "" || genre != ""
+	hasFilters := typ != "" || year != "" || region != "" || genre != "" || sortProvided
 
 	// Build cache key
 	var cacheKey string
 	if hasFilters {
-		cacheKey = fmt.Sprintf("douban:new:%s:%s:%s:%s:%s", typ, year, region, genre, sort)
+		cacheKey = newFilteredCacheKey(typ, year, region, genre, sort, page, pageSize)
 	} else {
 		cacheKey = "douban:new:all"
 	}
 
 	// Check cache
-	var cachedData []model.CategoryData
-	if err := h.cache.Get(ctx, cacheKey, &cachedData); err == nil {
-		cachedData = h.doubanService.SyncCategoryDataImages(ctx, cachedData)
-		if h.doubanService.ImageSyncEnabled() {
-			h.cache.SetKeepTTL(ctx, cacheKey, cachedData)
+	if hasFilters {
+		var cached newFilteredSnapshot
+		if err := h.cache.Get(ctx, cacheKey, &cached); err == nil {
+			cached.Data = h.doubanService.SyncCategoryDataImages(ctx, cached.Data)
+			if h.doubanService.ImageSyncEnabled() {
+				h.cache.SetKeepTTL(ctx, cacheKey, cached)
+			}
+			c.Set("cache_source", "redis-cache")
+			h.respondFiltered(c, cached, "redis-cache", typ, year, region, genre, sort)
+			return
 		}
-		c.Set("cache_source", "redis-cache") // 标记缓存命中供 metrics 追踪
-		c.JSON(http.StatusOK, gin.H{
-			"code":    200,
-			"data":    cachedData,
-			"source":  "redis-cache",
-			"filters": gin.H{"type": typ, "year": year, "region": region, "genre": genre, "sort": sort},
-		})
-		return
+	} else {
+		var cachedData []model.CategoryData
+		if err := h.cache.Get(ctx, cacheKey, &cachedData); err == nil {
+			cachedData = h.doubanService.SyncCategoryDataImages(ctx, cachedData)
+			if h.doubanService.ImageSyncEnabled() {
+				h.cache.SetKeepTTL(ctx, cacheKey, cachedData)
+			}
+			c.Set("cache_source", "redis-cache") // 标记缓存命中供 metrics 追踪
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"data":    cachedData,
+				"source":  "redis-cache",
+				"filters": gin.H{"type": typ, "year": year, "region": region, "genre": genre, "sort": sort},
+			})
+			return
+		}
 	}
 
 	// Mongo 快照兜底：Redis 过期后先从持久层取。
@@ -89,22 +113,11 @@ func (h *NewHandler) GetNew(c *gin.Context) {
 			var snap newFilteredSnapshot
 			if err := snapshotStore.Load(ctx, cacheKey, &snap); err == nil {
 				snap.Data = h.doubanService.SyncCategoryDataImages(ctx, snap.Data)
-				if err := h.cache.Set(ctx, cacheKey, snap.Data); err != nil {
+				if err := h.cache.Set(ctx, cacheKey, snap); err != nil {
 					log.Warn().Err(err).Str("key", cacheKey).Msg("Failed to backfill Redis from Mongo snapshot")
 				}
 				c.Set("cache_source", "mongo-snapshot")
-				c.JSON(http.StatusOK, gin.H{
-					"code":    200,
-					"data":    snap.Data,
-					"source":  "mongo-snapshot",
-					"filters": gin.H{"type": typ, "year": year, "region": region, "genre": genre, "sort": sort},
-					"pagination": gin.H{
-						"page":     snap.Pagination.Page,
-						"pageSize": snap.Pagination.PageSize,
-						"total":    snap.Pagination.Total,
-						"hasMore":  snap.Pagination.HasMore,
-					},
-				})
+				h.respondFiltered(c, snap, "mongo-snapshot", typ, year, region, genre, sort)
 				return
 			}
 		} else {
@@ -145,31 +158,20 @@ func (h *NewHandler) GetNew(c *gin.Context) {
 			Data: subjects,
 		}}
 
-		// Redis 缓存只存裸 []CategoryData（热路径，与既有行为一致）；
-		// Mongo 快照额外保留分页信息，作为持久层的完整真相源。
-		h.cache.Set(ctx, cacheKey, resultData)
+		filteredSnap := newFilteredSnapshot{
+			Data:       resultData,
+			Pagination: newPagination{Page: page, PageSize: pageSize, Total: total, HasMore: hasMore},
+		}
+		// Redis 与 Mongo 保存相同的分页载荷，避免热缓存命中时丢失
+		// pagination，也避免不同页共用一个缓存键。
+		h.cache.Set(ctx, cacheKey, filteredSnap)
 		if snapshotStore != nil {
-			filteredSnap := newFilteredSnapshot{
-				Data:       resultData,
-				Pagination: newPagination{Page: page, PageSize: pageSize, Total: total, HasMore: hasMore},
-			}
 			if err := snapshotStore.Store(ctx, cacheKey, filteredSnap); err != nil {
 				log.Warn().Err(err).Str("key", cacheKey).Msg("Failed to persist new (filtered) snapshot")
 			}
 		}
 
-		c.JSON(http.StatusOK, gin.H{
-			"code":    200,
-			"data":    resultData,
-			"source":  "fresh-data",
-			"filters": gin.H{"type": typ, "year": year, "region": region, "genre": genre, "sort": sort},
-			"pagination": gin.H{
-				"page":     page,
-				"pageSize": pageSize,
-				"total":    total,
-				"hasMore":  hasMore,
-			},
-		})
+		h.respondFiltered(c, filteredSnap, "fresh-data", typ, year, region, genre, sort)
 		return
 	}
 
@@ -236,6 +238,32 @@ func (h *NewHandler) GetNew(c *gin.Context) {
 		"filters":         gin.H{"type": typ, "year": year, "region": region, "genre": genre, "sort": sort},
 		"totalCategories": len(resultData),
 		"totalItems":      totalItems,
+	})
+}
+
+func newFilteredCacheKey(typ, year, region, genre, sort string, page, pageSize int) string {
+	parts := []string{typ, year, region, genre, sort}
+	for index := range parts {
+		parts[index] = url.QueryEscape(parts[index])
+	}
+	return fmt.Sprintf(
+		"douban:new:v2:%s:%s:%s:%s:%s:page:%d:size:%d",
+		parts[0], parts[1], parts[2], parts[3], parts[4], page, pageSize,
+	)
+}
+
+func (h *NewHandler) respondFiltered(c *gin.Context, payload newFilteredSnapshot, source, typ, year, region, genre, sort string) {
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"data":    payload.Data,
+		"source":  source,
+		"filters": gin.H{"type": typ, "year": year, "region": region, "genre": genre, "sort": sort},
+		"pagination": gin.H{
+			"page":     payload.Pagination.Page,
+			"pageSize": payload.Pagination.PageSize,
+			"total":    payload.Pagination.Total,
+			"hasMore":  payload.Pagination.HasMore,
+		},
 	})
 }
 
@@ -320,11 +348,11 @@ type newPagination struct {
 	HasMore  bool `json:"hasMore" bson:"has_more"`
 }
 
-// newFilteredSnapshot 是 /new 筛选分支持久化到 Mongo snapshots 的载荷：
-// 既保留分类数据，也保留分页信息，避免 Redis 过期后从快照恢复时分页丢失。
+// newFilteredSnapshot 是 /new 筛选分支在 Redis 与 Mongo 共用的载荷：
+// 分类数据和分页信息必须一起缓存，所有缓存层才能保持同一响应契约。
 type newFilteredSnapshot struct {
 	Data       []model.CategoryData `json:"data" bson:"data"`
-	Pagination newPagination         `json:"pagination" bson:"pagination"`
+	Pagination newPagination        `json:"pagination" bson:"pagination"`
 }
 
 // DeleteNewCache clears new content cache

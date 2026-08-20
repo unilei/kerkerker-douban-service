@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Go Version](https://img.shields.io/badge/Go-1.24-00ADD8?style=flat-square&logo=go)
+![Go Version](https://img.shields.io/badge/Go-1.26.6-00ADD8?style=flat-square&logo=go)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
 ![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker)
 
@@ -32,7 +32,7 @@
 
 | 组件     | 技术                            |
 | -------- | ------------------------------- |
-| 后端框架 | Go 1.24 + Gin                   |
+| 后端框架 | Go 1.26.6 + Gin                 |
 | 热缓存   | Redis 7                         |
 | 持久层   | MongoDB 7（可选，未配置自动降级） |
 | 容器化   | Docker + Docker Compose         |
@@ -104,7 +104,7 @@ go run cmd/refresh/main.go --max-age=24h --limit=500
 | `movies`        | 影片详情快照。`douban_id` 唯一索引，含完整 `detail`、刷新状态字段     |
 | `counters`      | `internal_id` 原子自增分配器（`findAndModify $inc`）                  |
 | `image_mappings`| 原图 URL → R2 镜像 URL 的持久映射，进程重启后复用已上传对象           |
-| `snapshots`     | 列表型端点（hero/movies/tv/new/search 等）的载荷快照，按缓存键存储    |
+| `snapshots`     | 列表型端点（hero/movies/tv/new/search/Top 250 等）的载荷快照，按缓存键存储 |
 
 ### internal_id 关联键
 
@@ -143,11 +143,61 @@ go run cmd/refresh/main.go --max-age=24h --limit=500
 | `/api/v1/tv`              | GET  | 电视剧分类       | `/api/v1/tv`                                  |
 | `/api/v1/new`             | GET  | 新上线筛选       | `/api/v1/new`                                 |
 | `/api/v1/category`        | GET  | 分类分页         | `/api/v1/category?category=hot_movies&page=1` |
+| `/api/v1/250`             | GET  | 完整豆瓣 Top 250 榜单 | `/api/v1/250`                            |
 | `/api/v1/detail/:id`      | GET  | 影片详情（豆瓣 ID，legacy 兼容） | `/api/v1/detail/1291546`            |
 | `/api/v1/movies/:internal_id` | GET | 影片详情（内部 ID，规范化入口） | `/api/v1/movies/42`                |
 | `/api/v1/search`          | GET  | 搜索影片         | `/api/v1/search?q=流浪地球`                   |
 | `/api/v1/calendar`        | GET  | 追剧日历         | `/api/v1/calendar?start_date=2026-01-09`      |
 | `/api/v1/calendar/airing` | GET  | 今日热播         | `/api/v1/calendar/airing?region=CN`           |
+
+`/api/v1/new` 的筛选分页使用 `page`（1–10000）与 `pageSize`（1–100）。显式传入 `sort=recommend|time|rank` 会进入筛选列表语义；Redis 和 Mongo 快照均保存 `data + pagination`，缓存键包含筛选条件、页码与页大小，不同页不会互相覆盖。
+
+### 获取豆瓣 Top 250
+
+`GET /api/v1/250` 一次返回按官方排名排序的完整 250 条影片。冷源使用豆瓣移动端 Top 250 集合，不会用“热门电影”或“豆瓣高分”等分类结果替代。
+
+```bash
+curl http://localhost:8080/api/v1/250
+```
+
+```json
+{
+  "code": 200,
+  "data": {
+    "subjects": [
+      {
+        "id": "1292052",
+        "title": "肖申克的救赎",
+        "rate": "9.7",
+        "cover": "https://img3.doubanio.com/view/photo/m_ratio_poster/public/p2934829882.jpg",
+        "url": "https://movie.douban.com/subject/1292052/"
+      }
+    ],
+    "fetched_at": "2026-08-20T06:03:22Z"
+  },
+  "source": "fresh-data"
+}
+```
+
+`source` 表示本次数据来源：
+
+| 值 | 说明 |
+| --- | --- |
+| `redis-cache` | Redis 热缓存命中 |
+| `mongo-snapshot` | Mongo 快照仍在新鲜期，并已回填 Redis |
+| `fresh-data` | 从豆瓣冷源获取并写入 Redis/Mongo |
+| `redis-stale` / `mongo-stale` | 快照已过期且豆瓣暂时不可用，返回最后一份完整旧榜单 |
+
+只有完整、排名连续且豆瓣 ID 唯一的 250 条数据才会写入缓存。没有可用旧快照且豆瓣冷源失败时返回 `502`：
+
+```json
+{
+  "code": 502,
+  "error": "获取豆瓣 Top 250 失败"
+}
+```
+
+启用 R2 图片同步时，Top 250 封面会在响应后于后台镜像，并更新 Redis 与 Mongo 快照，避免首次请求等待 250 张图片上传。
 
 ### 管理接口
 
@@ -158,6 +208,8 @@ go run cmd/refresh/main.go --max-age=24h --limit=500
 | `/api/v1/analytics`  | DELETE | 重置统计         |
 | `/api/v1/{endpoint}` | DELETE | 清除指定端点缓存 |
 | `/health`            | GET    | 健康检查         |
+
+`DELETE /api/v1/250` 需要 Admin API Key（启用认证时），会同时删除 Redis 热缓存和 Mongo 持久快照，使下一次 `GET /api/v1/250` 真正从豆瓣重新获取。
 
 ### 分类参数
 
@@ -220,7 +272,7 @@ ADMIN_API_KEY=your_secure_key      # 设置后管理接口需要认证
 # 缓存 TTL 配置 (单位：分钟)
 CACHE_TTL_HERO=360                 # Hero Banner 缓存，默认 6 小时
 CACHE_TTL_DETAIL=1440              # 详情页缓存，默认 24 小时
-CACHE_TTL_CATEGORY=60              # 分类缓存，默认 1 小时
+CACHE_TTL_CATEGORY=60              # 分类及 Top 250 新鲜期，默认 1 小时
 CACHE_TTL_SEARCH=30                # 搜索缓存，默认 30 分钟
 CACHE_TTL_DEFAULT=60               # 默认缓存，默认 1 小时
 ```
@@ -260,6 +312,33 @@ curl -H "Authorization: Bearer YOUR_ADMIN_API_KEY" http://localhost:8081/api/v1/
 ```
 
 ## 🌐 服务器部署
+
+### `cn-compliance` 分支自动部署
+
+`.github/workflows/deploy-cn-compliance.yml` 为当前合规分支提供独立流水线。推送到
+`cn-compliance` 后会依次执行格式检查、测试、`go vet` 和构建，发布带提交 SHA 的
+`linux/amd64` GHCR 镜像，再通过 SSH 只重建服务器现有 Compose 项目中的
+`douban-api` 服务。工作流不会上传或覆盖服务器的 `.env`，也不会替换 Redis、Mongo、
+网络和数据卷。
+
+部署成功必须同时满足 `/health` 返回成功，以及 `/api/v1/250` 返回完整 250 条数据；
+任一检查失败会把 `latest` 标签和 `douban-api` 容器恢复到部署前镜像。
+
+仓库需要配置以下 Actions Secrets：
+
+| Secret | 作用 |
+| --- | --- |
+| `DEPLOY_HOST` / `DEPLOY_USER` | VPS 地址和 SSH 用户 |
+| `DEPLOY_SSH_KEY` | 仅具备部署所需权限的 SSH 私钥 |
+| `DEPLOY_KNOWN_HOSTS` | 预先核验并固定的 SSH 主机指纹 |
+
+仓库 Variables 中的 `DEPLOY_PATH` 必须指向服务器现有 Compose 目录，其中的服务名必须为
+`douban-api`；`DEPLOY_PORT` 是宿主机健康检查端口，默认 `8081`。私有部署仓库可通过
+`IMAGE_NAME` 指定其私有 GHCR 制品名；`DEPLOY_STABLE_IMAGE_NAME` 必须与服务器现有 Compose
+引用的镜像名一致，默认 `ghcr.io/unilei/kerkerker-douban-service`。
+
+GitHub 不支持在公开仓库中单独隐藏某个分支。若 `cn-compliance` 的实现不能公开，必须在
+私有仓库运行这套流水线，或先将整个仓库改为私有；不得把待保密提交推到公开 origin。
 
 ### 第一步：发布镜像
 

@@ -88,6 +88,38 @@ func TestSnapshotStore_Overwrite(t *testing.T) {
 	}
 }
 
+func TestSnapshotStore_Delete(t *testing.T) {
+	uri := mongoTestURI(t)
+	dbName := "kerkerker_douban_test_snap_del_" + timeNowSuffix()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	stores, err := NewMongoStores(ctx, uri, dbName)
+	if err != nil {
+		t.Skipf("mongo unavailable, skipping: %v", err)
+	}
+	t.Cleanup(func() {
+		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		_ = stores.Close(cctx)
+	})
+
+	key := "douban:top250:all"
+	if err := stores.Snapshot.Store(ctx, key, map[string]string{"state": "old"}); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	if err := stores.Snapshot.Delete(ctx, key); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	var got map[string]string
+	if err := stores.Snapshot.Load(ctx, key, &got); err != ErrSnapshotNotFound {
+		t.Fatalf("expected ErrSnapshotNotFound after delete, got %v", err)
+	}
+	if err := stores.Snapshot.Delete(ctx, key); err != nil {
+		t.Fatalf("delete missing snapshot should be idempotent: %v", err)
+	}
+}
+
 func TestSnapshotStore_SearchResult(t *testing.T) {
 	uri := mongoTestURI(t)
 	dbName := "kerkerker_douban_test_snap_sr_" + timeNowSuffix()
