@@ -25,19 +25,19 @@ const (
 
 // Movie 是 movies 集合的文档结构，作为 Redis 之后的持久真相源。
 type Movie struct {
-	InternalID     int64               `bson:"internal_id"`
-	DoubanID       string              `bson:"douban_id"`
-	TMDBID         int64               `bson:"tmdb_id,omitempty"`
-	Title          string              `bson:"title"`
-	Rate           string              `bson:"rate"`
-	Cover          string              `bson:"cover"`
-	URL            string              `bson:"url"`
-	Detail         *model.SubjectDetail `bson:"detail,omitempty"`
-	RefreshStatus  RefreshStatus       `bson:"refresh_status"`
-	LastRefreshed  time.Time           `bson:"last_refreshed"`
-	RefreshError   string              `bson:"refresh_error,omitempty"`
-	CreatedAt      time.Time           `bson:"created_at"`
-	UpdatedAt      time.Time           `bson:"updated_at"`
+	InternalID    int64                `bson:"internal_id"`
+	DoubanID      string               `bson:"douban_id"`
+	TMDBID        int64                `bson:"tmdb_id,omitempty"`
+	Title         string               `bson:"title"`
+	Rate          string               `bson:"rate"`
+	Cover         string               `bson:"cover"`
+	URL           string               `bson:"url"`
+	Detail        *model.SubjectDetail `bson:"detail,omitempty"`
+	RefreshStatus RefreshStatus        `bson:"refresh_status"`
+	LastRefreshed time.Time            `bson:"last_refreshed"`
+	RefreshError  string               `bson:"refresh_error,omitempty"`
+	CreatedAt     time.Time            `bson:"created_at"`
+	UpdatedAt     time.Time            `bson:"updated_at"`
 }
 
 // ErrMovieNotFound 表示按 ID 查询时未命中。

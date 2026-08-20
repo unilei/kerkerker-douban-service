@@ -29,9 +29,9 @@ func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 
 	var (
-		maxAge  = flag.Duration("max-age", 24*time.Hour, "超过该时长未刷新的影片视为陈旧")
-		limit   = flag.Int("limit", 500, "单次刷新的最大条目数")
-		dryRun  = flag.Bool("dry-run", false, "仅列出待刷新条目，不实际抓取")
+		maxAge = flag.Duration("max-age", 24*time.Hour, "超过该时长未刷新的影片视为陈旧")
+		limit  = flag.Int("limit", 500, "单次刷新的最大条目数")
+		dryRun = flag.Bool("dry-run", false, "仅列出待刷新条目，不实际抓取")
 	)
 	flag.Parse()
 

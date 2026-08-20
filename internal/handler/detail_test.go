@@ -46,7 +46,7 @@ func (f *fakeMovieStore) ListStale(ctx context.Context, limit int, refreshedBefo
 func (f *fakeMovieStore) MarkStale(ctx context.Context, refreshedBefore time.Time) (int64, error) {
 	return 0, nil
 }
-func (f *fakeMovieStore) Ping(ctx context.Context) error { return nil }
+func (f *fakeMovieStore) Ping(ctx context.Context) error  { return nil }
 func (f *fakeMovieStore) Close(ctx context.Context) error { return nil }
 
 func newDetailHandlerWithStore(t *testing.T, store repository.MovieStore) (*DetailHandler, *repository.Cache, func()) {
