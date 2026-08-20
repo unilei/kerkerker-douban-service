@@ -202,19 +202,48 @@ jobs:
 
           stable_image="${STABLE_IMAGE_NAME}:latest"
           release_image="${IMAGE_NAME}:${IMAGE_TAG}"
+          app_container_name="kerkerker-douban-service"
+          legacy_backup=""
           previous_image_id="$(docker image inspect "$stable_image" --format '{{.Id}}' 2>/dev/null || true)"
           rollback() {
             echo "Deployment failed; restoring previous image" >&2
+            if [ -n "$legacy_backup" ] && docker container inspect "$legacy_backup" >/dev/null 2>&1; then
+              "${project[@]}" rm -sf douban-api || true
+              docker rename "$legacy_backup" "$app_container_name" || true
+              docker start "$app_container_name" || true
+              return
+            fi
             if [ -n "$previous_image_id" ]; then
               docker tag "$previous_image_id" "$stable_image"
-              "${project[@]}" up -d --no-build --force-recreate douban-api || true
+              "${project[@]}" up -d --no-deps --no-build --force-recreate douban-api || true
             fi
           }
           trap rollback ERR
 
           docker pull "$release_image"
           docker tag "$release_image" "$stable_image"
-          "${project[@]}" up -d --no-build --force-recreate douban-api
+
+          # The existing production container predates Compose ownership. Keep it
+          # intact until the first Compose-managed replacement passes smoke tests.
+          if docker container inspect "$app_container_name" >/dev/null 2>&1; then
+            compose_service="$(docker container inspect "$app_container_name" \
+              --format '{{ index .Config.Labels "com.docker.compose.service" }}')"
+            if [ "$compose_service" != "douban-api" ]; then
+              backup_candidate="${app_container_name}-pre-compose-${IMAGE_TAG:0:12}"
+              docker container inspect "$backup_candidate" >/dev/null 2>&1 && {
+                echo "Legacy backup container already exists: $backup_candidate" >&2
+                exit 1
+              }
+              docker stop "$app_container_name"
+              if ! docker rename "$app_container_name" "$backup_candidate"; then
+                docker start "$app_container_name" || true
+                exit 1
+              fi
+              legacy_backup="$backup_candidate"
+            fi
+          fi
+
+          "${project[@]}" up -d --no-deps --no-build --force-recreate douban-api
 
           for attempt in $(seq 1 40); do
             if curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:${SERVICE_PORT}/health" >/dev/null; then
@@ -235,6 +264,9 @@ jobs:
             exit 1
           }
 
+          if [ -n "$legacy_backup" ]; then
+            docker rm "$legacy_backup"
+          fi
           trap - ERR
           echo "Douban service deployment healthy on port ${SERVICE_PORT}; Top 250 contains 250 items"
           REMOTE
