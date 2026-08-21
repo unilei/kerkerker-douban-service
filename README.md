@@ -129,6 +129,8 @@ go run cmd/refresh/main.go --max-age=24h --limit=500
 
 常用参数：`--max-age`（陈旧阈值，默认 24h）、`--limit`（单次上限，默认 500）、`--dry-run`（只列出待刷新条目）。
 
+刷新任务还支持可选的机器可读进度协议。设置 `KERKERKER_JOB_REPORT=stdout` 后，程序会在标准输出写入以 `KERKERKER_JOB_EVENT ` 开头的 JSON 行，包含 `schema`、`run_id`、`plugin_id`、`profile_id`、`config_version`、状态和进度；默认关闭，不连接 Web Mongo、不发 HTTP 回报。cron 日志收集器可以先消费这些行，待宿主完成通用作业双写和权限设计后再接入持久化任务中心。
+
 `.github/workflows/refresh.yml` 仅保留 `workflow_dispatch` 手动触发（需在 Secrets 配置公网可达的 `MONGO_URI`），用于临时补数据；定时任务以服务器 cron 为准。
 
 ## 📡 API 端点

@@ -13,9 +13,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"kerkerker-douban-service/internal/config"
+	"kerkerker-douban-service/internal/jobreport"
 	"kerkerker-douban-service/internal/repository"
 	"kerkerker-douban-service/internal/service"
 	"kerkerker-douban-service/pkg/httpclient"
@@ -35,19 +37,52 @@ func main() {
 	)
 	flag.Parse()
 
+	reportMode := os.Getenv("KERKERKER_JOB_REPORT")
+	metadata := jobreport.Metadata{
+		RunID:         envOr("KERKERKER_REFRESH_RUN_ID", "refresh-"+strconv.FormatInt(time.Now().UTC().UnixNano(), 10)),
+		PluginID:      envOr("KERKERKER_PLUGIN_ID", "kerkerker.douban-content"),
+		PluginVersion: envOr("KERKERKER_PLUGIN_VERSION", "runtime"),
+		ProfileID:     envOr("KERKERKER_PLUGIN_PROFILE", "cn-default"),
+		ConfigVersion: envOr("KERKERKER_PLUGIN_CONFIG_VERSION", "runtime"),
+		Actor:         envOr("KERKERKER_JOB_ACTOR", "system/refresh"),
+		Attempt:       1,
+	}
+	var reporter *jobreport.JSONLinesReporter
+	if reportMode == "stdout" {
+		reporter = jobreport.NewJSONLinesReporter(os.Stdout, metadata)
+	}
+	emit := func(kind jobreport.Kind, status jobreport.Status, progress jobreport.Progress, reportError *jobreport.Error) {
+		if reporter == nil {
+			return
+		}
+		if err := reporter.Emit(kind, status, progress, reportError); err != nil {
+			log.Warn().Err(err).Msg("Failed to emit optional job report")
+		}
+	}
+	fatal := func(code, message string, err error) {
+		emit(jobreport.KindFinished, jobreport.StatusFailed, jobreport.Progress{}, &jobreport.Error{Code: code, Message: message})
+		event := log.Fatal()
+		if err != nil {
+			event = event.Err(err)
+		}
+		event.Msg(message)
+	}
+
 	cfg := config.Load()
 	if cfg.RequireR2ImageSync && !cfg.R2Images.Enabled {
-		log.Fatal().Msg("REQUIRE_R2_IMAGE_SYNC is enabled, but Cloudflare R2 image configuration is incomplete")
+		fatal("CONFIG_R2", "REQUIRE_R2_IMAGE_SYNC is enabled, but Cloudflare R2 image configuration is incomplete", nil)
 	}
 	log.Info().
 		Str("db", cfg.MongoDBName).
 		Dur("max-age", *maxAge).
 		Int("limit", *limit).
 		Bool("dry-run", *dryRun).
+		Str("run_id", metadata.RunID).
 		Msg("🛠  kerkerker-douban-service refresh starting")
+	emit(jobreport.KindStarted, jobreport.StatusRunning, jobreport.Progress{}, nil)
 
 	if cfg.MongoURI == "" {
-		log.Fatal().Msg("MONGO_URI is required for refresh")
+		fatal("CONFIG_MONGO", "MONGO_URI is required for refresh", nil)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -55,7 +90,7 @@ func main() {
 
 	stores, err := repository.NewMongoStores(ctx, cfg.MongoURI, cfg.MongoDBName)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to connect to MongoDB")
+		fatal("MONGO_CONNECT", "Failed to connect to MongoDB", err)
 	}
 	defer stores.Close(context.Background())
 
@@ -64,14 +99,14 @@ func main() {
 	// 1) 先把超过阈值的 fresh 条目批量标记为 stale，便于按索引扫描。
 	marked, err := stores.Movie.MarkStale(ctx, threshold)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to mark stale movies")
+		fatal("MARK_STALE", "Failed to mark stale movies", err)
 	}
 	log.Info().Int64("marked", marked).Msg("Marked stale movies")
 
 	// 2) 取出待刷新条目。
 	toRefresh, err := stores.Movie.ListStale(ctx, *limit, threshold)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to list stale movies")
+		fatal("LIST_STALE", "Failed to list stale movies", err)
 	}
 	log.Info().Int("count", len(toRefresh)).Msg("Movies to refresh")
 
@@ -79,6 +114,7 @@ func main() {
 		for _, m := range toRefresh {
 			log.Info().Int64("internal_id", m.InternalID).Str("douban_id", m.DoubanID).Str("title", m.Title).Msg("would refresh")
 		}
+		emit(jobreport.KindFinished, jobreport.StatusSucceeded, jobreport.Progress{Total: len(toRefresh), Processed: len(toRefresh), Skipped: len(toRefresh)}, nil)
 		return
 	}
 
@@ -98,7 +134,7 @@ func main() {
 				Bucket:          cfg.R2Images.Bucket,
 			})
 			if err != nil {
-				log.Fatal().Err(err).Msg("Failed to initialize R2 store")
+				fatal("R2_INIT", "Failed to initialize R2 store", err)
 			}
 			objectStore = r2Store
 		}
@@ -159,15 +195,31 @@ func main() {
 
 		if (i+1)%50 == 0 {
 			log.Info().Int("done", i+1).Int("total", len(toRefresh)).Msg("Refresh progress")
+			emit(jobreport.KindProgress, jobreport.StatusRunning, jobreport.Progress{
+				Total: len(toRefresh), Processed: i + 1, Created: success, Failed: failed,
+			}, nil)
 		}
 		// 轻微限速，降低被豆瓣封禁概率。
 		time.Sleep(800 * time.Millisecond)
 	}
 
 done:
+	processed := success + failed
+	finalStatus := jobreport.StatusSucceeded
+	if failed > 0 || processed < len(toRefresh) {
+		finalStatus = jobreport.StatusPartial
+	}
+	emit(jobreport.KindFinished, finalStatus, jobreport.Progress{Total: len(toRefresh), Processed: processed, Created: success, Failed: failed}, nil)
 	log.Info().
 		Int("success", success).
 		Int("failed", failed).
 		Int("total", len(toRefresh)).
 		Msg(fmt.Sprintf("✅ Refresh complete: %d success, %d failed of %d total", success, failed, len(toRefresh)))
+}
+
+func envOr(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
 }
