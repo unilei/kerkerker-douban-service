@@ -41,6 +41,7 @@ func main() {
 	reportMode := strings.ToLower(strings.TrimSpace(os.Getenv("KERKERKER_JOB_REPORT")))
 	metadata := jobreport.Metadata{
 		RunID:         envOr("KERKERKER_REFRESH_RUN_ID", "refresh-"+strconv.FormatInt(time.Now().UTC().UnixNano(), 10)),
+		JobID:         envOr("KERKERKER_JOB_ID", "content.refresh.daily"),
 		PluginID:      envOr("KERKERKER_PLUGIN_ID", "kerkerker.douban-content"),
 		PluginVersion: envOr("KERKERKER_PLUGIN_VERSION", "1.0.0"),
 		ProfileID:     envOr("KERKERKER_PLUGIN_PROFILE", "cn-default"),

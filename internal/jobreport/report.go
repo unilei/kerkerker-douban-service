@@ -21,8 +21,11 @@ import (
 
 const Schema = "kerkerker.plugin-job.v1"
 
+const legacyExternalReportJobID = "legacy.external-report"
+
 var (
 	runIDPattern          = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$`)
+	jobIDPattern          = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$`)
 	pluginIDPattern       = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)*$`)
 	rfc3339Pattern        = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$`)
 	jobReportTokenPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]{32,512}$`)
@@ -49,6 +52,7 @@ const (
 
 type Metadata struct {
 	RunID         string `json:"run_id"`
+	JobID         string `json:"job_id"`
 	PluginID      string `json:"plugin_id"`
 	PluginVersion string `json:"plugin_version"`
 	ProfileID     string `json:"profile_id"`
@@ -85,6 +89,9 @@ type Event struct {
 func validateMetadata(metadata Metadata) error {
 	if !runIDPattern.MatchString(metadata.RunID) {
 		return fmt.Errorf("job report run_id is invalid")
+	}
+	if !jobIDPattern.MatchString(metadata.JobID) || metadata.JobID == legacyExternalReportJobID {
+		return fmt.Errorf("job report job_id is invalid")
 	}
 	if !pluginIDPattern.MatchString(metadata.PluginID) {
 		return fmt.Errorf("job report plugin_id is invalid")

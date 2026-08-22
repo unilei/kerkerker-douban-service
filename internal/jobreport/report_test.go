@@ -34,7 +34,7 @@ func (s *flakySink) WriteEvent(event Event) error {
 
 func testMetadata() Metadata {
 	return Metadata{
-		RunID: "refresh-1", PluginID: "kerkerker.douban-content", PluginVersion: "1.0.0",
+		RunID: "refresh-1", JobID: "content.refresh.daily", PluginID: "kerkerker.douban-content", PluginVersion: "1.0.0",
 		ProfileID: "cn-default", ConfigVersion: "runtime", Actor: "system/refresh", Attempt: 1,
 	}
 }
@@ -71,6 +71,9 @@ func TestJSONLinesReporterEmitsOrderedMachineReadableEvents(t *testing.T) {
 		if event.Sequence != sequence || event.EventID != "refresh-1:"+strconv.Itoa(sequence) {
 			t.Fatalf("unexpected event ordering: %+v", event)
 		}
+		if event.Metadata.JobID != "content.refresh.daily" {
+			t.Fatalf("unexpected job_id: %q", event.Metadata.JobID)
+		}
 	}
 }
 
@@ -88,6 +91,17 @@ func TestEventValidationRejectsBrokenIdentityStateAndProgress(t *testing.T) {
 		t.Fatal("expected mismatched event_id to be rejected")
 	}
 	event.EventID = "refresh-1:0"
+	event.Metadata.JobID = ""
+	if err := event.Validate(); err == nil {
+		t.Fatal("expected a missing job_id to be rejected")
+	}
+	for _, invalidJobID := range []string{"Content.refresh.daily", ".content", "content.", "content/refresh", legacyExternalReportJobID, strings.Repeat("a", 101)} {
+		event.Metadata.JobID = invalidJobID
+		if err := event.Validate(); err == nil {
+			t.Fatalf("expected invalid job_id %q to be rejected", invalidJobID)
+		}
+	}
+	event.Metadata.JobID = "content.refresh.daily"
 	event.Progress = Progress{Total: 2, Processed: 1}
 	if err := event.Validate(); err == nil {
 		t.Fatal("expected uncategorized progress to be rejected")
@@ -131,6 +145,9 @@ func TestGoldenFixtureMatchesThePublicJobEventContract(t *testing.T) {
 	}
 	if event.EventID != event.Metadata.RunID+":"+strconv.Itoa(event.Sequence) {
 		t.Fatalf("golden fixture has inconsistent identity: %+v", event)
+	}
+	if event.Metadata.JobID == "" {
+		t.Fatal("golden fixture must include job_id for Go senders")
 	}
 }
 

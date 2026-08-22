@@ -144,6 +144,7 @@ HTTP 模式需要在服务器的 `douban.env` 中配置：
 KERKERKER_JOB_REPORT=http
 KERKERKER_JOB_REPORT_URL=https://your-host.example/api/plugins/jobs/report
 KERKERKER_JOB_REPORT_TOKEN=replace-with-the-same-dedicated-host-secret
+KERKERKER_JOB_ID=content.refresh.daily
 KERKERKER_PLUGIN_ID=kerkerker.douban-content
 KERKERKER_PLUGIN_VERSION=1.0.0
 KERKERKER_PLUGIN_PROFILE=cn-default
@@ -151,11 +152,11 @@ KERKERKER_PLUGIN_CONFIG_VERSION=runtime
 KERKERKER_JOB_ACTOR=system/refresh
 ```
 
-每次运行先发送 `sequence=0` 的 `started`，再发送累计进度和终态；`event_id` 固定为 `<run_id>:<sequence>`。HTTP 临时错误、`409` 和限流最多重试三次，重定向不会跟随，响应体不会写入日志。远程 URL 必须使用 HTTPS；只有 `localhost`、`127.0.0.1` 和 `::1` 可以使用 HTTP。上报最终失败只记录脱敏警告，不阻断影片刷新；当前没有跨进程持久 spool，因此宿主允许序号跳跃，但不会允许状态或累计进度倒退。
+每次运行先发送 `sequence=0` 的 `started`，再发送累计进度和终态；`event_id` 固定为 `<run_id>:<sequence>`。`metadata.job_id` 是稳定作业标识，默认 `content.refresh.daily`，可通过 `KERKERKER_JOB_ID` 覆盖，必须匹配 `^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$`，且不能使用保留值 `legacy.external-report`。该保留值仅供 Web 在 v1 接收旧发送端缺少 `job_id` 时内部映射；当前 Go 发送端始终发送并校验该字段。HTTP 临时错误、`409` 和限流最多重试三次，重定向不会跟随，响应体不会写入日志。远程 URL 必须使用 HTTPS；只有 `localhost`、`127.0.0.1` 和 `::1` 可以使用 HTTP。上报最终失败只记录脱敏警告，不阻断影片刷新；当前没有跨进程持久 spool，因此宿主允许序号跳跃，但不会允许状态或累计进度倒退。
 
 Web 宿主必须配置同一个独立 `KERKERKER_JOB_REPORT_TOKEN`。密钥必须是 32–512 位 URL-safe 字符，建议使用 `openssl rand -hex 32` 生成；不要复用管理员密码、会话密钥、Admin API Key 或其它 cron 密钥。该接入目前提供持久进度可见性，不提供宿主远程取消或刷新断点恢复。
 
-`cn-compliance` 自动部署支持用仓库变量 `DEPLOY_JOB_REPORT_MODE=http|both` 显式开启，并从 Secrets 读取 `DEPLOY_JOB_REPORT_URL`、`DEPLOY_JOB_REPORT_TOKEN`。流水线先向 HTTPS 接收器发送无效空事件并要求返回 `400`，同时验证地址和密钥，再以事务方式更新服务器 `douban.env`；失败时恢复旧文件。清空该变量会在下次部署时清除 URL 和密钥并关闭上报。Compose 覆盖层会把三个上报变量在长期运行的 `douban-api` 容器中强制清空，只有读取 `douban.env` 的一次性 refresh 容器能访问密钥。Web 与 Go 两个仓库中的 `DEPLOY_JOB_REPORT_TOKEN` 必须设置为同一随机值。
+`cn-compliance` 自动部署支持用仓库变量 `DEPLOY_JOB_REPORT_MODE=http|both` 显式开启，并从 Secrets 读取 `DEPLOY_JOB_REPORT_URL`、`DEPLOY_JOB_REPORT_TOKEN`。流水线先向 HTTPS 接收器发送无效空事件并要求返回 `400`，同时验证地址和密钥，再以事务方式更新服务器 `douban.env`；失败时恢复旧文件。它会同时写入 `KERKERKER_JOB_ID=content.refresh.daily`，并在合并 `douban.env` 时替换遗留的作业上报元数据。清空该变量会在下次部署时清除 URL 和密钥并关闭上报。Compose 覆盖层会把上报变量及 `KERKERKER_JOB_ID` 在长期运行的 `douban-api` 容器中强制清空，只有读取 `douban.env` 的一次性 refresh 容器能访问密钥。Web 与 Go 两个仓库中的 `DEPLOY_JOB_REPORT_TOKEN` 必须设置为同一随机值。
 
 `.github/workflows/refresh.yml` 仅保留 `workflow_dispatch` 手动触发（需在 Secrets 配置公网可达的 `MONGO_URI`），用于临时补数据；定时任务以服务器 cron 为准。
 

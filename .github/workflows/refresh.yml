@@ -97,6 +97,7 @@ jobs:
           KERKERKER_JOB_REPORT_URL: ${{ secrets.DEPLOY_JOB_REPORT_URL }}
           KERKERKER_JOB_REPORT_TOKEN: ${{ secrets.DEPLOY_JOB_REPORT_TOKEN }}
           KERKERKER_REFRESH_RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
+          KERKERKER_JOB_ID: content.refresh.daily
           KERKERKER_PLUGIN_ID: kerkerker.douban-content
           KERKERKER_PLUGIN_VERSION: 1.0.0
           KERKERKER_PLUGIN_PROFILE: cn-default
