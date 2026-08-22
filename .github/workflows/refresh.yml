@@ -44,6 +44,46 @@ jobs:
       - name: Build refresh binary
         run: go build -o /tmp/refresh ./cmd/refresh
 
+      - name: Validate optional job-report configuration
+        env:
+          JOB_REPORT_MODE: ${{ vars.DEPLOY_JOB_REPORT_MODE }}
+          JOB_REPORT_URL: ${{ secrets.DEPLOY_JOB_REPORT_URL }}
+          JOB_REPORT_TOKEN: ${{ secrets.DEPLOY_JOB_REPORT_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$JOB_REPORT_MODE" in
+            "") exit 0 ;;
+            http|both) ;;
+            *)
+              echo "DEPLOY_JOB_REPORT_MODE must be empty, http, or both" >&2
+              exit 1
+              ;;
+          esac
+          [[ "$JOB_REPORT_URL" =~ ^https://[^[:space:]#]+/api/plugins/jobs/report$ ]] || {
+            echo "DEPLOY_JOB_REPORT_URL must be an HTTPS job-report endpoint" >&2
+            exit 1
+          }
+          authority="${JOB_REPORT_URL#https://}"
+          authority="${authority%%/*}"
+          [[ -n "$authority" && "$authority" != *"@"* ]] || {
+            echo "DEPLOY_JOB_REPORT_URL authority is invalid" >&2
+            exit 1
+          }
+          [[ "$JOB_REPORT_TOKEN" =~ ^[A-Za-z0-9._~-]{32,512}$ ]] || {
+            echo "DEPLOY_JOB_REPORT_TOKEN must be a 32-512 character base64url-style secret" >&2
+            exit 1
+          }
+          status="$(curl --silent --show-error --max-time 15 \
+            --output /dev/null --write-out '%{http_code}' \
+            --header "Authorization: Bearer $JOB_REPORT_TOKEN" \
+            --header 'Content-Type: application/json' \
+            --data '{}' "$JOB_REPORT_URL")"
+          [[ "$status" == "400" ]] || {
+            echo "Host job-report credential probe returned HTTP $status instead of 400" >&2
+            exit 1
+          }
+
       - name: Run refresh
         env:
           MONGO_URI: ${{ secrets.MONGO_URI }}
@@ -53,6 +93,15 @@ jobs:
           CLOUDFLARE_R2_UPLOAD_API_URL: ${{ secrets.CLOUDFLARE_R2_UPLOAD_API_URL }}
           CLOUDFLARE_R2_UPLOAD_API_TOKEN: ${{ secrets.CLOUDFLARE_R2_UPLOAD_API_TOKEN }}
           CLOUDFLARE_R2_KEY_PREFIX: ${{ secrets.CLOUDFLARE_R2_KEY_PREFIX }}
+          KERKERKER_JOB_REPORT: ${{ vars.DEPLOY_JOB_REPORT_MODE }}
+          KERKERKER_JOB_REPORT_URL: ${{ secrets.DEPLOY_JOB_REPORT_URL }}
+          KERKERKER_JOB_REPORT_TOKEN: ${{ secrets.DEPLOY_JOB_REPORT_TOKEN }}
+          KERKERKER_REFRESH_RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
+          KERKERKER_PLUGIN_ID: kerkerker.douban-content
+          KERKERKER_PLUGIN_VERSION: 1.0.0
+          KERKERKER_PLUGIN_PROFILE: cn-default
+          KERKERKER_PLUGIN_CONFIG_VERSION: runtime
+          KERKERKER_JOB_ACTOR: system/github-actions
         run: |
           /tmp/refresh \
             --max-age="${{ github.event.inputs.max_age || '24h' }}" \

@@ -129,7 +129,33 @@ go run cmd/refresh/main.go --max-age=24h --limit=500
 
 常用参数：`--max-age`（陈旧阈值，默认 24h）、`--limit`（单次上限，默认 500）、`--dry-run`（只列出待刷新条目）。
 
-刷新任务还支持可选的机器可读进度协议。设置 `KERKERKER_JOB_REPORT=stdout` 后，程序会在标准输出写入以 `KERKERKER_JOB_EVENT ` 开头的 JSON 行，包含 `schema`、`run_id`、`plugin_id`、`profile_id`、`config_version`、状态和进度；默认关闭，不连接 Web Mongo、不发 HTTP 回报。cron 日志收集器可以先消费这些行，待宿主完成通用作业双写和权限设计后再接入持久化任务中心。
+刷新任务支持可选的 `kerkerker.plugin-job.v1` 机器可读进度协议，默认关闭：
+
+| `KERKERKER_JOB_REPORT` | 行为 |
+| --- | --- |
+| 空 | 不生成任务事件，保持原有行为 |
+| `stdout` | 写入以 `KERKERKER_JOB_EVENT ` 开头的 JSON 行 |
+| `http` | 通过 Bearer 认证 POST 到宿主任务接收器 |
+| `both` | 同一事件同时写 stdout 和 HTTP，序号、ID、时间戳完全一致 |
+
+HTTP 模式需要在服务器的 `douban.env` 中配置：
+
+```env
+KERKERKER_JOB_REPORT=http
+KERKERKER_JOB_REPORT_URL=https://your-host.example/api/plugins/jobs/report
+KERKERKER_JOB_REPORT_TOKEN=replace-with-the-same-dedicated-host-secret
+KERKERKER_PLUGIN_ID=kerkerker.douban-content
+KERKERKER_PLUGIN_VERSION=1.0.0
+KERKERKER_PLUGIN_PROFILE=cn-default
+KERKERKER_PLUGIN_CONFIG_VERSION=runtime
+KERKERKER_JOB_ACTOR=system/refresh
+```
+
+每次运行先发送 `sequence=0` 的 `started`，再发送累计进度和终态；`event_id` 固定为 `<run_id>:<sequence>`。HTTP 临时错误、`409` 和限流最多重试三次，重定向不会跟随，响应体不会写入日志。远程 URL 必须使用 HTTPS；只有 `localhost`、`127.0.0.1` 和 `::1` 可以使用 HTTP。上报最终失败只记录脱敏警告，不阻断影片刷新；当前没有跨进程持久 spool，因此宿主允许序号跳跃，但不会允许状态或累计进度倒退。
+
+Web 宿主必须配置同一个独立 `KERKERKER_JOB_REPORT_TOKEN`。密钥必须是 32–512 位 URL-safe 字符，建议使用 `openssl rand -hex 32` 生成；不要复用管理员密码、会话密钥、Admin API Key 或其它 cron 密钥。该接入目前提供持久进度可见性，不提供宿主远程取消或刷新断点恢复。
+
+`cn-compliance` 自动部署支持用仓库变量 `DEPLOY_JOB_REPORT_MODE=http|both` 显式开启，并从 Secrets 读取 `DEPLOY_JOB_REPORT_URL`、`DEPLOY_JOB_REPORT_TOKEN`。流水线先向 HTTPS 接收器发送无效空事件并要求返回 `400`，同时验证地址和密钥，再以事务方式更新服务器 `douban.env`；失败时恢复旧文件。清空该变量会在下次部署时清除 URL 和密钥并关闭上报。Compose 覆盖层会把三个上报变量在长期运行的 `douban-api` 容器中强制清空，只有读取 `douban.env` 的一次性 refresh 容器能访问密钥。Web 与 Go 两个仓库中的 `DEPLOY_JOB_REPORT_TOKEN` 必须设置为同一随机值。
 
 `.github/workflows/refresh.yml` 仅保留 `workflow_dispatch` 手动触发（需在 Secrets 配置公网可达的 `MONGO_URI`），用于临时补数据；定时任务以服务器 cron 为准。
 

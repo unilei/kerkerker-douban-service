@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"kerkerker-douban-service/internal/config"
@@ -37,19 +38,41 @@ func main() {
 	)
 	flag.Parse()
 
-	reportMode := os.Getenv("KERKERKER_JOB_REPORT")
+	reportMode := strings.ToLower(strings.TrimSpace(os.Getenv("KERKERKER_JOB_REPORT")))
 	metadata := jobreport.Metadata{
 		RunID:         envOr("KERKERKER_REFRESH_RUN_ID", "refresh-"+strconv.FormatInt(time.Now().UTC().UnixNano(), 10)),
 		PluginID:      envOr("KERKERKER_PLUGIN_ID", "kerkerker.douban-content"),
-		PluginVersion: envOr("KERKERKER_PLUGIN_VERSION", "runtime"),
+		PluginVersion: envOr("KERKERKER_PLUGIN_VERSION", "1.0.0"),
 		ProfileID:     envOr("KERKERKER_PLUGIN_PROFILE", "cn-default"),
 		ConfigVersion: envOr("KERKERKER_PLUGIN_CONFIG_VERSION", "runtime"),
 		Actor:         envOr("KERKERKER_JOB_ACTOR", "system/refresh"),
 		Attempt:       1,
 	}
-	var reporter *jobreport.JSONLinesReporter
-	if reportMode == "stdout" {
-		reporter = jobreport.NewJSONLinesReporter(os.Stdout, metadata)
+	var sinks []jobreport.Sink
+	if reportMode == "stdout" || reportMode == "both" {
+		sinks = append(sinks, jobreport.NewJSONLinesSink(os.Stdout))
+	}
+	if reportMode == "http" || reportMode == "both" {
+		httpSink, err := jobreport.NewHTTPSink(
+			os.Getenv("KERKERKER_JOB_REPORT_URL"),
+			os.Getenv("KERKERKER_JOB_REPORT_TOKEN"),
+			nil,
+		)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Invalid HTTP job report configuration")
+		}
+		sinks = append(sinks, httpSink)
+	}
+	if reportMode != "" && reportMode != "stdout" && reportMode != "http" && reportMode != "both" {
+		log.Fatal().Str("mode", reportMode).Msg("KERKERKER_JOB_REPORT must be stdout, http, or both")
+	}
+	var reporter *jobreport.Reporter
+	if len(sinks) > 0 {
+		var err error
+		reporter, err = jobreport.NewReporter(metadata, sinks...)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Invalid job report metadata")
+		}
 	}
 	emit := func(kind jobreport.Kind, status jobreport.Status, progress jobreport.Progress, reportError *jobreport.Error) {
 		if reporter == nil {
@@ -57,6 +80,11 @@ func main() {
 		}
 		if err := reporter.Emit(kind, status, progress, reportError); err != nil {
 			log.Warn().Err(err).Msg("Failed to emit optional job report")
+			if kind == jobreport.KindFinished {
+				if flushErr := reporter.Flush(); flushErr != nil {
+					log.Warn().Err(flushErr).Msg("Failed to flush final optional job report")
+				}
+			}
 		}
 	}
 	fatal := func(code, message string, err error) {
@@ -67,6 +95,7 @@ func main() {
 		}
 		event.Msg(message)
 	}
+	emit(jobreport.KindStarted, jobreport.StatusRunning, jobreport.Progress{}, nil)
 
 	cfg := config.Load()
 	if cfg.RequireR2ImageSync && !cfg.R2Images.Enabled {
@@ -79,7 +108,6 @@ func main() {
 		Bool("dry-run", *dryRun).
 		Str("run_id", metadata.RunID).
 		Msg("🛠  kerkerker-douban-service refresh starting")
-	emit(jobreport.KindStarted, jobreport.StatusRunning, jobreport.Progress{}, nil)
 
 	if cfg.MongoURI == "" {
 		fatal("CONFIG_MONGO", "MONGO_URI is required for refresh", nil)

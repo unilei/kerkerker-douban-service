@@ -34,6 +34,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Checkout host job-event fixture
+        uses: actions/checkout@v4
+        with:
+          repository: unilei/kerkerker
+          ref: cn-compliance
+          path: .host-contract
+          sparse-checkout: |
+            packages/kerkerker-plugin-contract/fixtures/plugin-job-event.v1.valid.json
+            packages/kerkerker-plugin-contract/fixtures/plugin-job-event.v1.invalid.json
+          sparse-checkout-cone-mode: false
+
+      - name: Verify host and worker job-event fixtures match
+        run: |
+          cmp \
+            internal/jobreport/testdata/plugin-job-event.v1.valid.json \
+            .host-contract/packages/kerkerker-plugin-contract/fixtures/plugin-job-event.v1.valid.json
+          cmp \
+            internal/jobreport/testdata/plugin-job-event.v1.invalid.json \
+            .host-contract/packages/kerkerker-plugin-contract/fixtures/plugin-job-event.v1.invalid.json
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -125,6 +145,9 @@ jobs:
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          JOB_REPORT_MODE: ${{ vars.DEPLOY_JOB_REPORT_MODE }}
+          JOB_REPORT_URL: ${{ secrets.DEPLOY_JOB_REPORT_URL }}
+          JOB_REPORT_TOKEN: ${{ secrets.DEPLOY_JOB_REPORT_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
@@ -139,6 +162,51 @@ jobs:
           [[ "$DEPLOY_PATH" =~ ^/[A-Za-z0-9_./-]+$ ]] || { echo "Invalid DEPLOY_PATH" >&2; exit 1; }
           [[ "$DEPLOY_ENV_FILE" =~ ^/[A-Za-z0-9_./-]+$ ]] || { echo "Invalid DEPLOY_ENV_FILE" >&2; exit 1; }
           [[ "$SERVICE_PORT" =~ ^[0-9]+$ ]] && (( SERVICE_PORT >= 1 && SERVICE_PORT <= 65535 )) || { echo "Invalid DEPLOY_PORT" >&2; exit 1; }
+          case "$JOB_REPORT_MODE" in
+            "") ;;
+            http|both)
+              [[ "$JOB_REPORT_URL" =~ ^https://[^[:space:]#]+/api/plugins/jobs/report$ ]] || {
+                echo "DEPLOY_JOB_REPORT_URL must be an HTTPS job-report endpoint" >&2
+                exit 1
+              }
+              authority="${JOB_REPORT_URL#https://}"
+              authority="${authority%%/*}"
+              [[ -n "$authority" && "$authority" != *"@"* ]] || {
+                echo "DEPLOY_JOB_REPORT_URL authority is invalid" >&2
+                exit 1
+              }
+              [[ "$JOB_REPORT_TOKEN" =~ ^[A-Za-z0-9._~-]{32,512}$ ]] || {
+                echo "DEPLOY_JOB_REPORT_TOKEN must be a 32-512 character base64url-style secret" >&2
+                exit 1
+              }
+              ;;
+            *)
+              echo "DEPLOY_JOB_REPORT_MODE must be empty, http, or both" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Verify host job-report credentials
+        env:
+          JOB_REPORT_MODE: ${{ vars.DEPLOY_JOB_REPORT_MODE }}
+          JOB_REPORT_URL: ${{ secrets.DEPLOY_JOB_REPORT_URL }}
+          JOB_REPORT_TOKEN: ${{ secrets.DEPLOY_JOB_REPORT_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$JOB_REPORT_MODE" ]]; then
+            echo "Job reporting remains disabled"
+            exit 0
+          fi
+          status="$(curl --silent --show-error --max-time 15 \
+            --output /dev/null --write-out '%{http_code}' \
+            --header "Authorization: Bearer $JOB_REPORT_TOKEN" \
+            --header 'Content-Type: application/json' \
+            --data '{}' "$JOB_REPORT_URL")"
+          [[ "$status" == "400" ]] || {
+            echo "Host job-report credential probe returned HTTP $status instead of 400" >&2
+            exit 1
+          }
 
       - name: Prepare SSH
         id: ssh
@@ -170,6 +238,42 @@ jobs:
           set -euo pipefail
           printf '%s' "$GHCR_TOKEN" | ssh -i "$KEY_FILE" -o BatchMode=yes -o UserKnownHostsFile="$KNOWN_HOSTS" \
             "$DEPLOY_USER@$DEPLOY_HOST" "docker login ghcr.io -u '$GHCR_USER' --password-stdin"
+
+      - name: Stage refresh job-report configuration
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          JOB_REPORT_MODE: ${{ vars.DEPLOY_JOB_REPORT_MODE }}
+          JOB_REPORT_URL: ${{ secrets.DEPLOY_JOB_REPORT_URL }}
+          JOB_REPORT_TOKEN: ${{ secrets.DEPLOY_JOB_REPORT_TOKEN }}
+          KEY_FILE: ${{ steps.ssh.outputs.key_file }}
+          KNOWN_HOSTS: ${{ steps.ssh.outputs.known_hosts }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i "$KEY_FILE" -o BatchMode=yes -o UserKnownHostsFile="$KNOWN_HOSTS" \
+            "$DEPLOY_USER@$DEPLOY_HOST" "rm -f '$DEPLOY_PATH/.job-report.env.new'"
+          report_env="$RUNNER_TEMP/job-report.env"
+          umask 077
+          trap 'rm -f "$report_env"' EXIT
+          if [[ -z "$JOB_REPORT_MODE" ]]; then
+            JOB_REPORT_URL=""
+            JOB_REPORT_TOKEN=""
+          fi
+          {
+            printf 'KERKERKER_JOB_REPORT=%s\n' "$JOB_REPORT_MODE"
+            printf 'KERKERKER_JOB_REPORT_URL=%s\n' "$JOB_REPORT_URL"
+            printf 'KERKERKER_JOB_REPORT_TOKEN=%s\n' "$JOB_REPORT_TOKEN"
+            printf '%s\n' 'KERKERKER_PLUGIN_ID=kerkerker.douban-content'
+            printf '%s\n' 'KERKERKER_PLUGIN_VERSION=1.0.0'
+            printf '%s\n' 'KERKERKER_PLUGIN_PROFILE=cn-default'
+            printf '%s\n' 'KERKERKER_PLUGIN_CONFIG_VERSION=runtime'
+            printf '%s\n' 'KERKERKER_JOB_ACTOR=system/refresh'
+          } > "$report_env"
+          ssh -i "$KEY_FILE" -o BatchMode=yes -o UserKnownHostsFile="$KNOWN_HOSTS" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "set -e; umask 077; cat > '$DEPLOY_PATH/.job-report.env.new'; chmod 600 '$DEPLOY_PATH/.job-report.env.new'" \
+            < "$report_env"
 
       - name: Roll out and verify
         env:
@@ -228,11 +332,24 @@ jobs:
                 R2_BUCKET: "${R2_BUCKET:-}"
                 R2_PUBLIC_URL: "${R2_PUBLIC_URL:-}"
                 REQUIRE_R2_IMAGE_SYNC: "true"
+                KERKERKER_JOB_REPORT: ""
+                KERKERKER_JOB_REPORT_URL: ""
+                KERKERKER_JOB_REPORT_TOKEN: ""
           OVERRIDE
 
           project=(docker compose --env-file "$DEPLOY_ENV_FILE" -f "$compose_file" -f "$override_file")
+          report_fragment="$DEPLOY_PATH/.job-report.env.new"
+          env_backup=""
+          merged_env=""
+          preserve_env_backup=false
           cleanup() {
-            rm -f "$override_file"
+            rm -f "$override_file" "$report_fragment"
+            if [ -n "$env_backup" ] && [ "$preserve_env_backup" != true ]; then
+              rm -f "$env_backup"
+            fi
+            if [ -n "$merged_env" ]; then
+              rm -f "$merged_env"
+            fi
           }
           trap cleanup EXIT
           "${project[@]}" config --services | grep -Fxq douban-api || {
@@ -244,6 +361,40 @@ jobs:
           release_image="${IMAGE_NAME}:${IMAGE_TAG}"
           app_container_name="kerkerker-douban-service"
           legacy_backup=""
+          merge_report_config() {
+            [ -f "$report_fragment" ] || {
+              echo "Staged refresh job-report configuration is missing" >&2
+              return 1
+            }
+            chmod 600 "$report_fragment"
+            env_directory="$(dirname "$DEPLOY_ENV_FILE")"
+            report_backup_candidate="$(mktemp "$env_directory/.douban.env.backup.XXXXXX")"
+            if ! cp -p "$DEPLOY_ENV_FILE" "$report_backup_candidate"; then
+              rm -f "$report_backup_candidate"
+              return 1
+            fi
+            if ! chmod 600 "$report_backup_candidate"; then
+              rm -f "$report_backup_candidate"
+              return 1
+            fi
+            env_backup="$report_backup_candidate"
+            merged_env="$(mktemp "$env_directory/.douban.env.merged.XXXXXX")"
+            awk '!/^(KERKERKER_JOB_REPORT|KERKERKER_JOB_REPORT_URL|KERKERKER_JOB_REPORT_TOKEN|KERKERKER_PLUGIN_ID|KERKERKER_PLUGIN_VERSION|KERKERKER_PLUGIN_PROFILE|KERKERKER_PLUGIN_CONFIG_VERSION|KERKERKER_JOB_ACTOR)=/' \
+              "$DEPLOY_ENV_FILE" > "$merged_env"
+            cat "$report_fragment" >> "$merged_env"
+            chmod 600 "$merged_env"
+            mv "$merged_env" "$DEPLOY_ENV_FILE"
+            merged_env=""
+          }
+          restore_report_config() {
+            if [ -n "$env_backup" ]; then
+              if [ ! -f "$env_backup" ] || ! mv -f "$env_backup" "$DEPLOY_ENV_FILE"; then
+                preserve_env_backup=true
+                return 1
+              fi
+              env_backup=""
+            fi
+          }
           previous_image_id="$(docker image inspect "$stable_image" --format '{{.Id}}' 2>/dev/null || true)"
           if [ -z "$previous_image_id" ] && docker container inspect "$app_container_name" >/dev/null 2>&1; then
             previous_image_id="$(docker container inspect "$app_container_name" --format '{{.Image}}')"
@@ -268,15 +419,22 @@ jobs:
           finish() {
             exit_status=$?
             trap - EXIT
-            if [ "$deployment_succeeded" != true ] && [ "$rollout_started" = true ]; then
+            if [ "$deployment_succeeded" != true ]; then
               set +e
-              rollback
+              if [ "$rollout_started" = true ]; then
+                rollback
+              fi
+              if ! restore_report_config; then
+                echo "Failed to restore the previous deployment environment; manual recovery is required" >&2
+                exit_status=1
+              fi
             fi
             cleanup
             exit "$exit_status"
           }
           trap finish EXIT
 
+          merge_report_config
           docker pull "$release_image"
           docker tag "$release_image" "$stable_image"
           rollout_started=true
@@ -310,6 +468,12 @@ jobs:
             [ "$attempt" -eq 40 ] && { echo "Douban service health check failed" >&2; exit 1; }
             sleep 3
           done
+
+          if docker container inspect "$app_container_name" --format '{{range .Config.Env}}{{println .}}{{end}}' \
+            | grep -Eq '^KERKERKER_JOB_REPORT(_URL|_TOKEN)?=.'; then
+            echo "Refresh job-report credentials leaked into the long-lived API container" >&2
+            exit 1
+          fi
 
           r2_public_url="$(docker exec "$app_container_name" sh -c \
             'printf %s "${CLOUDFLARE_R2_PUBLIC_URL:-$R2_PUBLIC_URL}"')"
@@ -371,6 +535,18 @@ jobs:
           deployment_succeeded=true
           echo "Douban service deployment healthy on port ${SERVICE_PORT}; R2 image sync is enabled and Top 250 covers are 250/250"
           REMOTE
+
+      - name: Clean staged refresh credentials
+        if: ${{ always() && steps.ssh.outcome == 'success' }}
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          KEY_FILE: ${{ steps.ssh.outputs.key_file }}
+          KNOWN_HOSTS: ${{ steps.ssh.outputs.known_hosts }}
+        shell: bash
+        run: |
+          ssh -i "$KEY_FILE" -o BatchMode=yes -o UserKnownHostsFile="$KNOWN_HOSTS" \
+            "$DEPLOY_USER@$DEPLOY_HOST" "rm -f '$DEPLOY_PATH/.job-report.env.new'"
 
       - name: Deployment summary
         run: |
