@@ -19,11 +19,16 @@ const (
 )
 
 type PluginHandler struct {
-	tmdb *service.TMDBService
+	tmdb        *service.TMDBService
+	imageSyncer *service.ImageSyncer
 }
 
-func NewPluginHandler(tmdb *service.TMDBService) *PluginHandler {
-	return &PluginHandler{tmdb: tmdb}
+func NewPluginHandler(tmdb *service.TMDBService, imageSyncers ...*service.ImageSyncer) *PluginHandler {
+	var imageSyncer *service.ImageSyncer
+	if len(imageSyncers) > 0 {
+		imageSyncer = imageSyncers[0]
+	}
+	return &PluginHandler{tmdb: tmdb, imageSyncer: imageSyncer}
 }
 
 func (h *PluginHandler) setContractHeaders(c *gin.Context) {
@@ -136,6 +141,7 @@ func (h *PluginHandler) Invoke(c *gin.Context) {
 		h.pluginError(c, fault)
 		return
 	}
+	result = preparePluginImages(result, h.imageSyncer)
 	c.JSON(http.StatusOK, result)
 }
 

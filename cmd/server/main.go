@@ -144,7 +144,7 @@ func main() {
 	top250Handler := handler.NewTop250Handler(doubanService, cache, cfg.CacheTTLCategory)
 	adminHandler := handler.NewAdminHandler(doubanService, tmdbService, metrics)
 	calendarHandler := handler.NewCalendarHandler(tmdbService, doubanService, cache, cfg.CacheTTLCategory)
-	pluginHandler := handler.NewPluginHandler(tmdbService)
+	pluginHandler := handler.NewPluginHandler(tmdbService, imageSyncer)
 
 	// Setup router
 	r := gin.New()

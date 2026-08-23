@@ -257,6 +257,8 @@ curl http://localhost:8080/api/v1/250
 
 TMDB 的 `content.catalog` 对宿主页面提供完整的电影、电视剧、最新和 Top250 目录：`sections/movies`、`sections/series` 分别映射 TMDB popular，`latest` 在未指定内容类型时混合电影与电视剧，`new-releases` 返回带 `latest-movies` 和 `latest-series` 稳定分组的首页数据。TMDB 没有官方“Top 250”接口，`category=top250` 使用 `movie/top_rated` 聚合前 250 条，并以 `vote_count.gte=200` 过滤低样本条目，页面标题标注为 “TMDB Top Rated 250”。
 
+插件返回的 TMDB 海报、背景图、详情照片、推荐图和日历图片都进入同一套 R2 镜像器：已有原图映射立即复用，未命中的图片在后台同步，首次响应保留来源地址作为降级路径。TMDB 日历会从剧集详情的 `last_episode_to_air` / `next_episode_to_air` 读取实际集播出时间，只返回落在请求日期范围内的排播事件，不使用剧集的历史 `first_air_date` 冒充单集播出日。
+
 健康检查和调用均返回 `x-kerkerker-contract-version: 1.0.0`；请求可以通过
 `x-kerkerker-contract-versions` 协商兼容版本。认证失败、版本不兼容、参数错误和
 TMDB 上游错误均使用 `{ "error": { "code", "message", "retryable" } }`，不会透传

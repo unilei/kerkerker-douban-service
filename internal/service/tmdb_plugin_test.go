@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestInvokePluginCatalogUsesServerSideKeyAndProviderDTO(t *testing.T) {
@@ -48,6 +49,21 @@ func TestInvokePluginCatalogUsesServerSideKeyAndProviderDTO(t *testing.T) {
 	}
 	if strings.Contains(string(mustJSON(t, result)), "upstream-secret") {
 		t.Fatal("TMDB API key leaked in plugin response")
+	}
+}
+
+func TestTMDBCandidateUsesBackdropWhenPosterIsMissing(t *testing.T) {
+	service := NewTMDBService([]string{"secret"}, "", "https://image.tmdb.org/t/p/original")
+	candidate, ok := service.candidate(tmdbMediaResult{
+		ID:           123,
+		Title:        "Backdrop Only",
+		BackdropPath: "/backdrop.jpg",
+	}, "movie", "en-US")
+	if !ok || candidate.Preview == nil {
+		t.Fatalf("expected a valid candidate, got %#v", candidate)
+	}
+	if candidate.Preview.PosterURL != "https://image.tmdb.org/t/p/w500/backdrop.jpg" {
+		t.Fatalf("expected backdrop fallback poster, got %q", candidate.Preview.PosterURL)
 	}
 }
 
@@ -99,8 +115,14 @@ func TestInvokePluginCatalogLatestMixesMovieAndSeriesWithSections(t *testing.T) 
 		var payload string
 		switch r.URL.Path {
 		case "/3/discover/movie":
+			if got := r.URL.Query().Get("primary_release_date.lte"); got == "" || got > time.Now().UTC().Format("2006-01-02") {
+				t.Fatalf("latest movies must be capped at today, got %q", got)
+			}
 			payload = `{"page":1,"total_pages":1,"total_results":1,"results":[{"id":303,"title":"Latest Movie","release_date":"2026-08-01"}]}`
 		case "/3/discover/tv":
+			if got := r.URL.Query().Get("first_air_date.lte"); got == "" || got > time.Now().UTC().Format("2006-01-02") {
+				t.Fatalf("latest series must be capped at today, got %q", got)
+			}
 			payload = `{"page":1,"total_pages":1,"total_results":1,"results":[{"id":404,"name":"Latest Series","first_air_date":"2026-08-02"}]}`
 		default:
 			t.Fatalf("unexpected latest path: %s", r.URL.Path)
@@ -167,6 +189,35 @@ func TestInvokePluginCatalogTop250AggregatesTMDBTopRatedPages(t *testing.T) {
 	}
 	if got := page.Items[249].ExternalRefs[0].ExternalID; got != "250" {
 		t.Fatalf("unexpected last Top250 item: %s", got)
+	}
+}
+
+func TestInvokePluginCalendarUsesEpisodeAirDate(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/3/discover/tv":
+			_, _ = w.Write([]byte(`{"page":1,"total_pages":1,"total_results":1,"results":[{"id":501,"name":"Current Show","first_air_date":"1963-04-01","poster_path":"/poster.jpg"}]}`))
+		case "/3/tv/501":
+			_, _ = w.Write([]byte(`{"last_episode_to_air":{"id":1,"name":"Old Episode","air_date":"1963-04-01","season_number":1,"episode_number":1},"next_episode_to_air":{"id":2,"name":"New Episode","air_date":"2026-08-24","season_number":3,"episode_number":4}}`))
+		default:
+			t.Fatalf("unexpected calendar path: %s", r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+
+	tmdb := NewTMDBService([]string{"secret"}, upstream.URL+"/3", "https://image.tmdb.org/t/p/original")
+	request, _ := json.Marshal(tmdbPluginRequest{From: "2026-08-20", To: "2026-08-26", Region: "US", Limit: 20})
+	result, fault := tmdb.InvokePlugin(context.Background(), "content.calendar", "calendar", request, PluginContext{RequestID: "calendar", Profile: "en-default", Locale: "en-US"})
+	if fault != nil {
+		t.Fatalf("unexpected calendar fault: %+v", fault)
+	}
+	page, ok := result.(PluginCalendarPage)
+	if !ok || len(page.Items) != 1 {
+		t.Fatalf("unexpected calendar result: %#v", result)
+	}
+	item := page.Items[0]
+	if item.Calendar.AirDate != "2026-08-24" || item.Calendar.SeasonNumber != 3 || item.Calendar.EpisodeNumber != 4 || item.Calendar.EpisodeName != "New Episode" {
+		t.Fatalf("expected episode schedule metadata, got %#v", item.Calendar)
 	}
 }
 

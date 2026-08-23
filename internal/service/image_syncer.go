@@ -111,6 +111,23 @@ func (s *ImageSyncer) PersistentMappingEnabled() bool {
 	return s != nil && s.mapStore != nil
 }
 
+// LookupURL returns a previously mirrored URL without performing network I/O.
+// Plugin responses use this fast path so an already warmed R2 mapping never
+// delays the request; a background SyncURLs call handles cache misses.
+func (s *ImageSyncer) LookupURL(rawURL string) string {
+	if s == nil {
+		return rawURL
+	}
+	trimmedURL := strings.TrimSpace(rawURL)
+	if trimmedURL == "" || strings.HasPrefix(trimmedURL, s.cfg.PublicBaseURL+"/") {
+		return trimmedURL
+	}
+	if cached, ok := s.cachedURL(trimmedURL); ok {
+		return cached
+	}
+	return rawURL
+}
+
 // SyncURL mirrors a Douban/TMDB image URL to R2. It returns the original URL on any failure.
 func (s *ImageSyncer) SyncURL(ctx context.Context, rawURL string) string {
 	if !s.Enabled() {
@@ -344,6 +361,13 @@ func (s *ImageSyncer) SyncCalendarEntriesImages(ctx context.Context, entries []m
 		entries[i].Backdrop = synced[entries[i].Backdrop]
 	}
 	return entries
+}
+
+// SyncURLs mirrors a deduplicated set of Douban/TMDB image URLs. It returns a
+// mapping from each original URL to either its R2 URL or the original URL on
+// failure, preserving the service's existing graceful-degradation behavior.
+func (s *ImageSyncer) SyncURLs(ctx context.Context, urls []string) map[string]string {
+	return s.syncURLs(ctx, urls)
 }
 
 func (s *ImageSyncer) syncURLs(ctx context.Context, urls []string) map[string]string {

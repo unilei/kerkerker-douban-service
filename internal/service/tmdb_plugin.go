@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -93,6 +95,7 @@ type PluginCalendar struct {
 	AirDate       string  `json:"airDate"`
 	SeasonNumber  int     `json:"seasonNumber"`
 	EpisodeNumber int     `json:"episodeNumber"`
+	EpisodeName   string  `json:"episodeName,omitempty"`
 	PosterURL     string  `json:"posterUrl,omitempty"`
 	BackdropURL   string  `json:"backdropUrl,omitempty"`
 	Rating        float64 `json:"rating,omitempty"`
@@ -243,6 +246,22 @@ type tmdbImage struct {
 	Height   int    `json:"height"`
 }
 
+type tmdbEpisode struct {
+	ID            int     `json:"id"`
+	Name          string  `json:"name"`
+	Overview      string  `json:"overview"`
+	AirDate       string  `json:"air_date"`
+	SeasonNumber  int     `json:"season_number"`
+	EpisodeNumber int     `json:"episode_number"`
+	VoteAverage   float64 `json:"vote_average"`
+	StillPath     string  `json:"still_path"`
+}
+
+type tmdbEpisodeEnvelope struct {
+	NextEpisodeToAir *tmdbEpisode `json:"next_episode_to_air"`
+	LastEpisodeToAir *tmdbEpisode `json:"last_episode_to_air"`
+}
+
 type PluginFault struct {
 	Code      string         `json:"code"`
 	Message   string         `json:"message"`
@@ -381,9 +400,17 @@ func (s *TMDBService) candidate(result tmdbMediaResult, fallbackKind, locale str
 		return PluginCandidate{}, false
 	}
 	canonical := canonicalTMDBURL(kind, result.ID)
+	posterPath := result.PosterPath
+	if posterPath == "" {
+		posterPath = result.BackdropPath
+	}
+	backdropPath := result.BackdropPath
+	if backdropPath == "" {
+		backdropPath = result.PosterPath
+	}
 	preview := &PluginPreview{
-		PosterURL:   s.imageURL(result.PosterPath, "w500"),
-		BackdropURL: s.imageURL(result.BackdropPath, "w1280"),
+		PosterURL:   s.imageURL(posterPath, "w500"),
+		BackdropURL: s.imageURL(backdropPath, "w1280"),
 		URL:         canonical,
 	}
 	if result.VoteAverage > 0 {
@@ -499,13 +526,19 @@ func (s *TMDBService) catalogForKind(ctx context.Context, request tmdbPluginRequ
 	key := firstNonEmptyPlugin(request.Key, request.Category)
 	if view == "latest" || view == "new-releases" {
 		path = "/discover/" + kind
+		// TMDB includes announced/future titles in Discover (for example
+		// 100 Years in 2099). Latest/release pages must never surface content
+		// that has not aired or premiered yet.
+		today := time.Now().UTC().Format("2006-01-02")
 		if kind == "tv" {
 			params["sort_by"] = "first_air_date.desc"
+			params["first_air_date.lte"] = today
 			if request.Filters.Year != "" {
 				params["first_air_date_year"] = request.Filters.Year
 			}
 		} else {
 			params["sort_by"] = "primary_release_date.desc"
+			params["primary_release_date.lte"] = today
 			if request.Filters.Year != "" {
 				params["primary_release_year"] = request.Filters.Year
 			}
@@ -716,6 +749,31 @@ func nextCursor(page, totalPages int) string {
 	return ""
 }
 
+func (s *TMDBService) calendarEpisodes(ctx context.Context, id int, locale string) ([]tmdbEpisode, error) {
+	data, err := s.FetchJSON(ctx, "/tv/"+strconv.Itoa(id), locale, nil)
+	if err != nil {
+		return nil, err
+	}
+	var envelope tmdbEpisodeEnvelope
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return nil, err
+	}
+	episodes := make([]tmdbEpisode, 0, 2)
+	seen := make(map[string]struct{}, 2)
+	for _, episode := range []*tmdbEpisode{envelope.LastEpisodeToAir, envelope.NextEpisodeToAir} {
+		if episode == nil || episode.ID <= 0 || episode.AirDate == "" {
+			continue
+		}
+		key := fmt.Sprintf("%d:%s", episode.ID, episode.AirDate)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		episodes = append(episodes, *episode)
+	}
+	return episodes, nil
+}
+
 func (s *TMDBService) calendar(ctx context.Context, request tmdbPluginRequest, pc PluginContext) (PluginCalendarPage, *PluginFault) {
 	from, fromErr := time.Parse("2006-01-02", strings.TrimSpace(request.From))
 	to, toErr := time.Parse("2006-01-02", strings.TrimSpace(request.To))
@@ -741,28 +799,76 @@ func (s *TMDBService) calendar(ctx context.Context, request tmdbPluginRequest, p
 	if fault != nil {
 		return PluginCalendarPage{}, fault
 	}
+	// Discover TV returns show-level records. Resolve each show's last/next
+	// episode so the calendar contains actual episode dates rather than the
+	// show's historical first_air_date (which can be decades outside the range).
 	items := make([]PluginCalendarCandidate, 0, resultLimit(request.Limit))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 8)
 	for _, result := range pageData.Results {
-		candidate, ok := s.candidate(result, "tv", pc.Locale)
-		if !ok {
-			continue
-		}
-		date := tmdbDate(result)
-		candidateCalendar := PluginCalendar{
-			EventID:       fmt.Sprintf("%d:%s:1:1", result.ID, date),
-			AirDate:       date,
-			SeasonNumber:  1,
-			EpisodeNumber: 1,
-			PosterURL:     s.imageURL(result.PosterPath, "w500"),
-			BackdropURL:   s.imageURL(result.BackdropPath, "w1280"),
-			Rating:        result.VoteAverage,
-		}
-		items = append(items, PluginCalendarCandidate{PluginCandidate: candidate, Calendar: candidateCalendar})
-		if len(items) >= resultLimit(request.Limit) {
-			break
-		}
+		result := result
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			episodes, err := s.calendarEpisodes(ctx, result.ID, pc.Locale)
+			if err != nil {
+				return
+			}
+			candidate, ok := s.candidate(result, "tv", pc.Locale)
+			if !ok {
+				return
+			}
+			posterPath := result.PosterPath
+			if posterPath == "" {
+				posterPath = result.BackdropPath
+			}
+			backdropPath := result.BackdropPath
+			if backdropPath == "" {
+				backdropPath = result.PosterPath
+			}
+			for _, episode := range episodes {
+				if episode.AirDate < request.From || episode.AirDate > request.To {
+					continue
+				}
+				candidateCopy := candidate
+				if candidateCopy.Preview != nil && episode.Name != "" {
+					candidateCopy.Preview.EpisodeInfo = fmt.Sprintf("S%dE%d", episode.SeasonNumber, episode.EpisodeNumber)
+				}
+				candidateCalendar := PluginCalendar{
+					EventID:       fmt.Sprintf("%d:%s:%d:%d", result.ID, episode.AirDate, episode.SeasonNumber, episode.EpisodeNumber),
+					AirDate:       episode.AirDate,
+					SeasonNumber:  episode.SeasonNumber,
+					EpisodeNumber: episode.EpisodeNumber,
+					EpisodeName:   episode.Name,
+					PosterURL:     s.imageURL(posterPath, "w500"),
+					BackdropURL:   s.imageURL(backdropPath, "w1280"),
+					Rating:        episode.VoteAverage,
+				}
+				if candidateCalendar.Rating == 0 {
+					candidateCalendar.Rating = result.VoteAverage
+				}
+				mu.Lock()
+				items = append(items, PluginCalendarCandidate{PluginCandidate: candidateCopy, Calendar: candidateCalendar})
+				mu.Unlock()
+			}
+		}()
 	}
-	return PluginCalendarPage{Items: items, Total: pageData.TotalResults, NextCursor: nextCursor(page, pageData.TotalPages), HasMore: pageData.TotalPages > page}, nil
+	wg.Wait()
+	sort.SliceStable(items, func(left, right int) bool {
+		if items[left].Calendar.AirDate != items[right].Calendar.AirDate {
+			return items[left].Calendar.AirDate < items[right].Calendar.AirDate
+		}
+		return items[left].Calendar.EventID < items[right].Calendar.EventID
+	})
+	total := len(items)
+	limit := resultLimit(request.Limit)
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return PluginCalendarPage{Items: items, Total: total, HasMore: false}, nil
 }
 
 func (s *TMDBService) lookupDetail(ctx context.Context, id, locale string) (*tmdbDetail, string, *PluginFault) {
@@ -871,7 +977,11 @@ func (s *TMDBService) detail(ctx context.Context, request tmdbPluginRequest, pc 
 	if kind == "tv" && detail.NumberOfEpisodes > 0 {
 		episodeCount = strconv.Itoa(detail.NumberOfEpisodes)
 	}
-	base.Preview.BackdropURL = s.imageURL(detail.BackdropPath, "w1280")
+	if detail.BackdropPath != "" {
+		base.Preview.BackdropURL = s.imageURL(detail.BackdropPath, "w1280")
+	} else if base.Preview.BackdropURL == "" {
+		base.Preview.BackdropURL = base.Preview.PosterURL
+	}
 	return &PluginDetailCandidate{PluginCandidate: base, Details: PluginDetails{Rating: base.Preview.Rating, Genres: genres, Directors: directors, Actors: actors, Duration: duration, EpisodeCount: episodeCount, Photos: photos, Recommendations: recommendations}}, nil
 }
 
