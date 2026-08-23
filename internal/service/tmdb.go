@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,22 @@ import (
 
 	"github.com/rs/zerolog/log"
 )
+
+// TMDBRequestError preserves the upstream HTTP status without exposing the
+// configured API key. Plugin handlers use it to return a stable error class.
+type TMDBRequestError struct {
+	Status int
+	Err    error
+}
+
+func (e *TMDBRequestError) Error() string {
+	if e.Err == nil {
+		return fmt.Sprintf("TMDB returned status %d", e.Status)
+	}
+	return fmt.Sprintf("TMDB returned status %d: %v", e.Status, e.Err)
+}
+
+func (e *TMDBRequestError) Unwrap() error { return e.Err }
 
 // TMDBService handles TMDB API interactions with key rotation
 type TMDBService struct {
@@ -195,6 +212,66 @@ func (s *TMDBService) IsConfigured() bool {
 // KeyCount returns the number of configured API keys
 func (s *TMDBService) KeyCount() int {
 	return len(s.apiKeys)
+}
+
+// FetchJSON is the provider runtime boundary used by the versioned TMDB
+// plugin facade. It accepts only a relative TMDB API path and never returns
+// credentials or request headers to callers.
+func (s *TMDBService) FetchJSON(ctx context.Context, path, locale string, params map[string]string) (json.RawMessage, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	apiKey := s.getNextKey()
+	if apiKey == "" {
+		return nil, fmt.Errorf("TMDB API key not configured")
+	}
+	base := strings.TrimRight(s.baseURL, "/")
+	if base == "" {
+		base = "https://api.themoviedb.org/3"
+	}
+	if !strings.HasPrefix(path, "/") || strings.Contains(path, "..") {
+		return nil, fmt.Errorf("invalid TMDB API path")
+	}
+	u, err := url.Parse(base + path)
+	if err != nil {
+		return nil, fmt.Errorf("invalid TMDB API URL: %w", err)
+	}
+	query := u.Query()
+	if locale == "" {
+		locale = "en-US"
+	}
+	query.Set("language", locale)
+	for key, value := range params {
+		if key != "" && value != "" {
+			query.Set(key, value)
+		}
+	}
+	u.RawQuery = query.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("TMDB request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, &TMDBRequestError{Status: resp.StatusCode}
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 8*1024*1024+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > 8*1024*1024 {
+		return nil, fmt.Errorf("TMDB response exceeds size limit")
+	}
+	if !json.Valid(data) {
+		return nil, fmt.Errorf("TMDB returned invalid JSON")
+	}
+	return json.RawMessage(data), nil
 }
 
 // Helper functions

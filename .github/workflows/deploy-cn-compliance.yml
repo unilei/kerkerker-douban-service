@@ -148,6 +148,7 @@ jobs:
           JOB_REPORT_MODE: ${{ vars.DEPLOY_JOB_REPORT_MODE }}
           JOB_REPORT_URL: ${{ secrets.DEPLOY_JOB_REPORT_URL }}
           JOB_REPORT_TOKEN: ${{ secrets.DEPLOY_JOB_REPORT_TOKEN }}
+          TMDB_PLUGIN_SERVICE_TOKEN: ${{ secrets.DEPLOY_TMDB_PLUGIN_SERVICE_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
@@ -157,6 +158,10 @@ jobs:
               exit 1
             fi
           done
+          [[ "$TMDB_PLUGIN_SERVICE_TOKEN" =~ ^[A-Za-z0-9._~-]{32,512}$ ]] || {
+            echo "DEPLOY_TMDB_PLUGIN_SERVICE_TOKEN must be a 32-512 character URL-safe secret" >&2
+            exit 1
+          }
           [[ "$DEPLOY_HOST" != *$'\n'* ]] || { echo "DEPLOY_HOST contains a newline" >&2; exit 1; }
           [[ "$DEPLOY_USER" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] || { echo "Invalid DEPLOY_USER" >&2; exit 1; }
           [[ "$DEPLOY_PATH" =~ ^/[A-Za-z0-9_./-]+$ ]] || { echo "Invalid DEPLOY_PATH" >&2; exit 1; }
@@ -246,6 +251,7 @@ jobs:
           JOB_REPORT_MODE: ${{ vars.DEPLOY_JOB_REPORT_MODE }}
           JOB_REPORT_URL: ${{ secrets.DEPLOY_JOB_REPORT_URL }}
           JOB_REPORT_TOKEN: ${{ secrets.DEPLOY_JOB_REPORT_TOKEN }}
+          TMDB_PLUGIN_SERVICE_TOKEN: ${{ secrets.DEPLOY_TMDB_PLUGIN_SERVICE_TOKEN }}
           KEY_FILE: ${{ steps.ssh.outputs.key_file }}
           KNOWN_HOSTS: ${{ steps.ssh.outputs.known_hosts }}
         shell: bash
@@ -270,6 +276,7 @@ jobs:
             printf '%s\n' 'KERKERKER_PLUGIN_PROFILE=cn-default'
             printf '%s\n' 'KERKERKER_PLUGIN_CONFIG_VERSION=runtime'
             printf '%s\n' 'KERKERKER_JOB_ACTOR=system/refresh'
+            printf 'TMDB_PLUGIN_SERVICE_TOKEN=%s\n' "$TMDB_PLUGIN_SERVICE_TOKEN"
           } > "$report_env"
           ssh -i "$KEY_FILE" -o BatchMode=yes -o UserKnownHostsFile="$KNOWN_HOSTS" \
             "$DEPLOY_USER@$DEPLOY_HOST" \
@@ -381,7 +388,7 @@ jobs:
             fi
             env_backup="$report_backup_candidate"
             merged_env="$(mktemp "$env_directory/.douban.env.merged.XXXXXX")"
-            awk '!/^(KERKERKER_JOB_REPORT|KERKERKER_JOB_REPORT_URL|KERKERKER_JOB_REPORT_TOKEN|KERKERKER_JOB_ID|KERKERKER_PLUGIN_ID|KERKERKER_PLUGIN_VERSION|KERKERKER_PLUGIN_PROFILE|KERKERKER_PLUGIN_CONFIG_VERSION|KERKERKER_JOB_ACTOR)=/' \
+            awk '!/^(KERKERKER_JOB_REPORT|KERKERKER_JOB_REPORT_URL|KERKERKER_JOB_REPORT_TOKEN|KERKERKER_JOB_ID|KERKERKER_PLUGIN_ID|KERKERKER_PLUGIN_VERSION|KERKERKER_PLUGIN_PROFILE|KERKERKER_PLUGIN_CONFIG_VERSION|KERKERKER_JOB_ACTOR|TMDB_PLUGIN_SERVICE_TOKEN)=/' \
               "$DEPLOY_ENV_FILE" > "$merged_env"
             cat "$report_fragment" >> "$merged_env"
             chmod 600 "$merged_env"

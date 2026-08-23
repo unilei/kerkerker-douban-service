@@ -19,6 +19,9 @@ type Config struct {
 	TMDBAPIKeys   []string // 支持多个 API Key 轮询
 	TMDBBaseURL   string
 	TMDBImageBase string
+	// TMDBPluginServiceToken protects the versioned plugin sidecar endpoints.
+	// It is independent from both the TMDB upstream key and the admin key.
+	TMDBPluginServiceToken string
 
 	// Cloudflare R2 image sync
 	R2Images           R2ImageConfig
@@ -71,17 +74,18 @@ func Load() *Config {
 	}
 
 	return &Config{
-		Port:               getEnv("PORT", "8080"),
-		GinMode:            getEnv("GIN_MODE", "debug"),
-		RedisURL:           getEnv("REDIS_URL", "redis://localhost:6379"),
-		MongoURI:           getEnv("MONGO_URI", ""),
-		MongoDBName:        getEnv("MONGO_DB_NAME", "kerkerker_douban"),
-		DoubanProxies:      proxies,
-		TMDBAPIKeys:        tmdbKeys,
-		TMDBBaseURL:        getEnv("TMDB_BASE_URL", "https://api.themoviedb.org/3"),
-		TMDBImageBase:      getEnv("TMDB_IMAGE_BASE", "https://image.tmdb.org/t/p/original"),
-		R2Images:           loadR2ImageConfig(),
-		RequireR2ImageSync: getBool("REQUIRE_R2_IMAGE_SYNC", false),
+		Port:                   getEnv("PORT", "8080"),
+		GinMode:                getEnv("GIN_MODE", "debug"),
+		RedisURL:               getEnv("REDIS_URL", "redis://localhost:6379"),
+		MongoURI:               getEnv("MONGO_URI", ""),
+		MongoDBName:            getEnv("MONGO_DB_NAME", "kerkerker_douban"),
+		DoubanProxies:          proxies,
+		TMDBAPIKeys:            tmdbKeys,
+		TMDBBaseURL:            getEnv("TMDB_BASE_URL", "https://api.themoviedb.org/3"),
+		TMDBImageBase:          getEnv("TMDB_IMAGE_BASE", "https://image.tmdb.org/t/p/original"),
+		TMDBPluginServiceToken: strings.TrimSpace(getEnv("TMDB_PLUGIN_SERVICE_TOKEN", "")),
+		R2Images:               loadR2ImageConfig(),
+		RequireR2ImageSync:     getBool("REQUIRE_R2_IMAGE_SYNC", false),
 
 		// 缓存 TTL（可通过环境变量覆盖，单位：分钟）
 		CacheTTLHero:     getDurationMinutes("CACHE_TTL_HERO", 360),    // 6 小时

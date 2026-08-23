@@ -144,6 +144,7 @@ func main() {
 	top250Handler := handler.NewTop250Handler(doubanService, cache, cfg.CacheTTLCategory)
 	adminHandler := handler.NewAdminHandler(doubanService, tmdbService, metrics)
 	calendarHandler := handler.NewCalendarHandler(tmdbService, doubanService, cache, cfg.CacheTTLCategory)
+	pluginHandler := handler.NewPluginHandler(tmdbService)
 
 	// Setup router
 	r := gin.New()
@@ -185,6 +186,16 @@ func main() {
 		// 日历接口
 		api.GET("/calendar", calendarHandler.GetCalendar)
 		api.GET("/calendar/airing", calendarHandler.GetAiring)
+	}
+
+	// Versioned remote plugin facade. The manifest is public metadata; health
+	// and invocation are protected by a dedicated service-to-service token.
+	r.GET("/plugin/v1/manifest", pluginHandler.Manifest)
+	plugin := r.Group("/plugin/v1")
+	plugin.Use(middleware.PluginServiceAuth(cfg.TMDBPluginServiceToken))
+	{
+		plugin.GET("/health", pluginHandler.Health)
+		plugin.POST("/invoke", pluginHandler.Invoke)
 	}
 
 	// Admin routes - 需要认证（如果配置了 ADMIN_API_KEY）

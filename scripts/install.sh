@@ -356,6 +356,8 @@ interactive_config() {
     print_info "获取地址: https://www.themoviedb.org/settings/api"
     print_info "多个 API Key 用逗号分隔，将启用轮询负载均衡"
     TMDB_KEY=$(read_input "TMDB API Key (可选)" "")
+    print_info "Web 宿主调用 TMDB 插件的独立 Bearer 密钥（不要复用 TMDB API Key）"
+    TMDB_PLUGIN_TOKEN=$(read_input "TMDB 插件服务 Token (可选)" "" "true")
     
     # Cloudflare R2
     echo ""
@@ -387,6 +389,11 @@ interactive_config() {
     fi
     if [ -n "$TMDB_KEY" ]; then
         printf "   %bTMDB API:%b       已设置\n" "${BOLD}" "${NC}"
+    fi
+    if [ -n "$TMDB_PLUGIN_TOKEN" ]; then
+        printf "   %bTMDB 插件服务:%b 已设置\n" "${BOLD}" "${NC}"
+    else
+        printf "   %bTMDB 插件服务:%b 未启用\n" "${YELLOW}" "${NC}"
     fi
     if [ -n "$R2_PUBLIC_URL" ] && { { [ -n "$R2_UPLOAD_API_URL" ] && [ -n "$R2_UPLOAD_API_TOKEN" ]; } || { [ -n "$R2_ACCOUNT_ID" ] && [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACCESS_KEY" ] && [ -n "$R2_BUCKET" ]; }; }; then
         printf "   %bR2 图片同步:%b    已设置\n" "${BOLD}" "${NC}"
@@ -438,6 +445,7 @@ DOUBAN_API_PROXY=${DOUBAN_PROXY}
 TMDB_API_KEY=${TMDB_KEY}
 TMDB_BASE_URL=https://api.themoviedb.org/3
 TMDB_IMAGE_BASE=https://image.tmdb.org/t/p/original
+TMDB_PLUGIN_SERVICE_TOKEN=${TMDB_PLUGIN_TOKEN}
 
 # Cloudflare R2 图片同步
 CLOUDFLARE_R2_ACCOUNT_ID=${R2_ACCOUNT_ID}
@@ -482,6 +490,7 @@ services:
       - TMDB_API_KEY=\${TMDB_API_KEY:-}
       - TMDB_BASE_URL=\${TMDB_BASE_URL:-https://api.themoviedb.org/3}
       - TMDB_IMAGE_BASE=\${TMDB_IMAGE_BASE:-https://image.tmdb.org/t/p/original}
+      - TMDB_PLUGIN_SERVICE_TOKEN=\${TMDB_PLUGIN_SERVICE_TOKEN:-}
       - CLOUDFLARE_R2_ACCOUNT_ID=\${CLOUDFLARE_R2_ACCOUNT_ID:-}
       - CLOUDFLARE_R2_ENDPOINT=\${CLOUDFLARE_R2_ENDPOINT:-}
       - CLOUDFLARE_R2_ACCESS_KEY_ID=\${CLOUDFLARE_R2_ACCESS_KEY_ID:-}

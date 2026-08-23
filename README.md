@@ -243,6 +243,23 @@ curl http://localhost:8080/api/v1/250
 
 `DELETE /api/v1/250` 需要 Admin API Key（启用认证时），会同时删除 Redis 热缓存和 Mongo 持久快照，使下一次 `GET /api/v1/250` 真正从豆瓣重新获取。
 
+### TMDB 插件运行时接口
+
+服务同时承载 `kerkerker.tmdb-content` 插件，供 Web 宿主通过固定的
+`kerkerker-plugin-contract` v1 JSON 协议调用。TMDB 上游 Key 只存在本服务
+进程内，不会出现在插件响应、Manifest 或日志中。
+
+| 端点 | 方法 | 认证 | 说明 |
+| --- | --- | --- | --- |
+| `/plugin/v1/manifest` | GET | 无 | 返回公开 Manifest 元数据 |
+| `/plugin/v1/health` | GET | `Authorization: Bearer TMDB_PLUGIN_SERVICE_TOKEN` | 就绪检查与契约版本 |
+| `/plugin/v1/invoke` | POST | `Authorization: Bearer TMDB_PLUGIN_SERVICE_TOKEN` | 执行 `content.catalog`、`content.calendar`、`content.detail`、`content.search` 或 `asset.image` |
+
+健康检查和调用均返回 `x-kerkerker-contract-version: 1.0.0`；请求可以通过
+`x-kerkerker-contract-versions` 协商兼容版本。认证失败、版本不兼容、参数错误和
+TMDB 上游错误均使用 `{ "error": { "code", "message", "retryable" } }`，不会透传
+上游响应正文。
+
 ### 分类参数
 
 `/api/v1/category` 端点支持以下分类：
@@ -281,6 +298,13 @@ DOUBAN_API_PROXY=https://proxy1.example.com,https://proxy2.example.com
 TMDB_API_KEY=your_api_key_1,your_api_key_2
 TMDB_BASE_URL=https://api.themoviedb.org/3
 TMDB_IMAGE_BASE=https://image.tmdb.org/t/p/original
+# Web 宿主调用 TMDB 插件运行时的独立 Bearer 密钥（不要复用 TMDB_API_KEY 或 ADMIN_API_KEY）
+TMDB_PLUGIN_SERVICE_TOKEN=replace_with_a_random_service_token
+
+该密钥只用于 Web 宿主调用服务承载的 TMDB 插件，不是 `TMDB_API_KEY`，也不能复用 `ADMIN_API_KEY`。
+插件契约端点为 `GET /plugin/v1/manifest`、受保护的 `GET /plugin/v1/health` 和
+`POST /plugin/v1/invoke`。调用使用 `Authorization: Bearer <TMDB_PLUGIN_SERVICE_TOKEN>`，
+请求体遵循 `kerkerker` 插件契约 v1；TMDB API Key 永远不会出现在响应、日志或 Web 容器中。
 
 # Cloudflare R2 图片同步
 # 推荐：通过鉴权 Upload Worker 上传
