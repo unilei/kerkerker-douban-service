@@ -221,6 +221,39 @@ func TestInvokePluginCalendarUsesEpisodeAirDate(t *testing.T) {
 	}
 }
 
+func TestInvokePluginCalendarIncludesIntermediateSeasonEpisodes(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/3/discover/tv":
+			_, _ = w.Write([]byte(`{"page":1,"total_pages":1,"total_results":1,"results":[{"id":502,"name":"Weekly Show","first_air_date":"1963-04-01","poster_path":"/poster.jpg"}]}`))
+		case "/3/tv/502":
+			_, _ = w.Write([]byte(`{"seasons":[{"season_number":3,"air_date":"2026-08-01","episode_count":3}]}`))
+		case "/3/tv/502/season/3":
+			_, _ = w.Write([]byte(`{"episodes":[{"id":31,"name":"Episode One","air_date":"2026-08-21","season_number":3,"episode_number":1},{"id":32,"name":"Episode Two","air_date":"2026-08-22","season_number":3,"episode_number":2},{"id":33,"name":"Outside Window","air_date":"2026-08-30","season_number":3,"episode_number":3}]}`))
+		default:
+			t.Fatalf("unexpected calendar path: %s", r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+
+	tmdb := NewTMDBService([]string{"secret"}, upstream.URL+"/3", "https://image.tmdb.org/t/p/original")
+	request, _ := json.Marshal(tmdbPluginRequest{From: "2026-08-20", To: "2026-08-26", Region: "US", Limit: 20})
+	result, fault := tmdb.InvokePlugin(context.Background(), "content.calendar", "calendar", request, PluginContext{RequestID: "calendar-intermediate", Profile: "en-default", Locale: "en-US"})
+	if fault != nil {
+		t.Fatalf("unexpected calendar fault: %+v", fault)
+	}
+	page, ok := result.(PluginCalendarPage)
+	if !ok || len(page.Items) != 2 {
+		t.Fatalf("expected two in-window episodes, got %#v", result)
+	}
+	if page.Items[0].Calendar.EpisodeNumber != 1 || page.Items[1].Calendar.EpisodeNumber != 2 {
+		t.Fatalf("unexpected episode order: %#v", page.Items)
+	}
+	if page.Items[0].Preview == nil || page.Items[1].Preview == nil || page.Items[0].Preview.EpisodeInfo == page.Items[1].Preview.EpisodeInfo {
+		t.Fatalf("calendar entries share mutable preview state: %#v", page.Items)
+	}
+}
+
 func TestInvokePluginDetailFallsBackFromMovieToTV(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/3/movie/456" {

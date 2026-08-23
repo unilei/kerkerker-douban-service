@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -206,14 +207,17 @@ type tmdbMediaResult struct {
 
 type tmdbDetail struct {
 	tmdbMediaResult
-	Runtime           int           `json:"runtime"`
-	EpisodeRunTime    []int         `json:"episode_run_time"`
-	NumberOfEpisodes  int           `json:"number_of_episodes"`
-	Genres            []tmdbGenre   `json:"genres"`
-	ProductionCountry []tmdbCountry `json:"production_countries"`
-	Credits           tmdbCredits   `json:"credits"`
-	Images            tmdbImages    `json:"images"`
-	Recommendations   tmdbPaged     `json:"recommendations"`
+	Runtime           int                 `json:"runtime"`
+	EpisodeRunTime    []int               `json:"episode_run_time"`
+	NumberOfEpisodes  int                 `json:"number_of_episodes"`
+	Seasons           []tmdbSeasonSummary `json:"seasons"`
+	LastEpisodeToAir  *tmdbEpisode        `json:"last_episode_to_air"`
+	NextEpisodeToAir  *tmdbEpisode        `json:"next_episode_to_air"`
+	Genres            []tmdbGenre         `json:"genres"`
+	ProductionCountry []tmdbCountry       `json:"production_countries"`
+	Credits           tmdbCredits         `json:"credits"`
+	Images            tmdbImages          `json:"images"`
+	Recommendations   tmdbPaged           `json:"recommendations"`
 }
 
 type tmdbGenre struct {
@@ -257,9 +261,14 @@ type tmdbEpisode struct {
 	StillPath     string  `json:"still_path"`
 }
 
-type tmdbEpisodeEnvelope struct {
-	NextEpisodeToAir *tmdbEpisode `json:"next_episode_to_air"`
-	LastEpisodeToAir *tmdbEpisode `json:"last_episode_to_air"`
+type tmdbSeasonSummary struct {
+	SeasonNumber int    `json:"season_number"`
+	AirDate      string `json:"air_date"`
+	EpisodeCount int    `json:"episode_count"`
+}
+
+type tmdbSeasonEnvelope struct {
+	Episodes []tmdbEpisode `json:"episodes"`
 }
 
 type PluginFault struct {
@@ -654,18 +663,50 @@ func (s *TMDBService) top250(ctx context.Context, request tmdbPluginRequest, pc 
 	const totalLimit = 250
 	const providerPageSize = 20
 	const pageCount = (totalLimit + providerPageSize - 1) / providerPageSize
+	// Fetch the provider pages in bounded parallelism. Top Rated 250 is a
+	// fixed aggregate, and serially waiting for thirteen pages can consume the
+	// host's request deadline even when every individual call is healthy.
+	pageData := make([]tmdbPaged, pageCount)
+	fetchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	const fetchConcurrency = 4
+	sem := make(chan struct{}, fetchConcurrency)
+	var wg sync.WaitGroup
+	var faultMu sync.Mutex
+	var firstFault *PluginFault
+	for page := 1; page <= pageCount; page++ {
+		page := page
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			result, fault := s.fetchPaged(fetchCtx, "/movie/top_rated", pc.Locale, map[string]string{
+				"page":           strconv.Itoa(page),
+				"include_adult":  "false",
+				"vote_count.gte": "200",
+			})
+			if fault != nil {
+				faultMu.Lock()
+				if firstFault == nil {
+					firstFault = fault
+					cancel()
+				}
+				faultMu.Unlock()
+				return
+			}
+			pageData[page-1] = result
+		}()
+	}
+	wg.Wait()
+	if firstFault != nil {
+		return PluginPage{}, firstFault
+	}
+
 	items := make([]PluginCandidate, 0, totalLimit)
 	seen := make(map[string]struct{}, totalLimit)
-	for page := 1; page <= pageCount; page++ {
-		pageData, fault := s.fetchPaged(ctx, "/movie/top_rated", pc.Locale, map[string]string{
-			"page":           strconv.Itoa(page),
-			"include_adult":  "false",
-			"vote_count.gte": "200",
-		})
-		if fault != nil {
-			return PluginPage{}, fault
-		}
-		for _, result := range pageData.Results {
+	for _, page := range pageData {
+		for _, result := range page.Results {
 			candidate, ok := s.candidate(result, "movie", pc.Locale)
 			if !ok || len(candidate.ExternalRefs) == 0 {
 				continue
@@ -680,7 +721,7 @@ func (s *TMDBService) top250(ctx context.Context, request tmdbPluginRequest, pc 
 				break
 			}
 		}
-		if len(items) >= totalLimit || len(pageData.Results) == 0 {
+		if len(items) >= totalLimit {
 			break
 		}
 	}
@@ -749,29 +790,139 @@ func nextCursor(page, totalPages int) string {
 	return ""
 }
 
-func (s *TMDBService) calendarEpisodes(ctx context.Context, id int, locale string) ([]tmdbEpisode, error) {
-	data, err := s.FetchJSON(ctx, "/tv/"+strconv.Itoa(id), locale, nil)
+const calendarSeasonFetchConcurrency = 4
+
+func (s *TMDBService) fetchCalendarJSON(ctx context.Context, semaphore chan struct{}, path, locale string) (json.RawMessage, error) {
+	select {
+	case semaphore <- struct{}{}:
+		defer func() { <-semaphore }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return s.FetchJSON(ctx, path, locale, nil)
+}
+
+// calendarEpisodes resolves the episode-level schedule for one show. TMDB's
+// discover response is show-shaped, so its air_date filter alone is not enough
+// for a release calendar. Season details contain every episode date, including
+// episodes between last_episode_to_air and next_episode_to_air.
+func (s *TMDBService) calendarEpisodes(ctx context.Context, id int, locale, from, to string, upstreamSemaphore chan struct{}) ([]tmdbEpisode, error) {
+	data, err := s.fetchCalendarJSON(ctx, upstreamSemaphore, "/tv/"+strconv.Itoa(id), locale)
 	if err != nil {
 		return nil, err
 	}
-	var envelope tmdbEpisodeEnvelope
-	if err := json.Unmarshal(data, &envelope); err != nil {
+	var detail tmdbDetail
+	if err := json.Unmarshal(data, &detail); err != nil {
 		return nil, err
 	}
-	episodes := make([]tmdbEpisode, 0, 2)
-	seen := make(map[string]struct{}, 2)
-	for _, episode := range []*tmdbEpisode{envelope.LastEpisodeToAir, envelope.NextEpisodeToAir} {
-		if episode == nil || episode.ID <= 0 || episode.AirDate == "" {
+
+	fallback := make([]tmdbEpisode, 0, 2)
+	for _, episode := range []*tmdbEpisode{detail.LastEpisodeToAir, detail.NextEpisodeToAir} {
+		if episode != nil && episode.ID > 0 && episode.AirDate != "" {
+			fallback = append(fallback, *episode)
+		}
+	}
+
+	seasonNumbers := make(map[int]struct{})
+	latestSeason := 0
+	if len(detail.Seasons) > 0 {
+		for _, season := range detail.Seasons {
+			if season.SeasonNumber <= 0 {
+				continue
+			}
+			if season.SeasonNumber > latestSeason && (season.AirDate == "" || season.AirDate <= to) {
+				latestSeason = season.SeasonNumber
+			}
+			// Include seasons that start in the requested window, plus the latest
+			// season that started before it so an ongoing season is not lost. An
+			// empty season date is not a reason to fetch every historical season;
+			// the latest-season fallback below covers that incomplete metadata.
+			if season.AirDate != "" && season.AirDate <= to && season.AirDate >= from {
+				seasonNumbers[season.SeasonNumber] = struct{}{}
+			}
+		}
+		if latestSeason > 0 {
+			seasonNumbers[latestSeason] = struct{}{}
+		}
+		for _, episode := range fallback {
+			if episode.SeasonNumber > 0 {
+				seasonNumbers[episode.SeasonNumber] = struct{}{}
+			}
+		}
+	}
+
+	seasons := make([]int, 0, len(seasonNumbers))
+	for seasonNumber := range seasonNumbers {
+		seasons = append(seasons, seasonNumber)
+	}
+	sort.Ints(seasons)
+	resolved := make([]tmdbEpisode, 0)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, calendarSeasonFetchConcurrency)
+	var seasonFetchError error
+	for _, seasonNumber := range seasons {
+		seasonNumber := seasonNumber
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			seasonData, fetchErr := s.fetchCalendarJSON(ctx, upstreamSemaphore, fmt.Sprintf("/tv/%d/season/%d", id, seasonNumber), locale)
+			if fetchErr != nil {
+				mu.Lock()
+				if seasonFetchError == nil {
+					seasonFetchError = fetchErr
+				}
+				mu.Unlock()
+				return
+			}
+			var season tmdbSeasonEnvelope
+			if json.Unmarshal(seasonData, &season) != nil {
+				mu.Lock()
+				if seasonFetchError == nil {
+					seasonFetchError = errors.New("TMDB returned invalid season JSON")
+				}
+				mu.Unlock()
+				return
+			}
+			mu.Lock()
+			resolved = append(resolved, season.Episodes...)
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	if len(seasons) > 0 && len(resolved) == 0 && len(fallback) == 0 && seasonFetchError != nil {
+		return nil, seasonFetchError
+	}
+
+	// Some TMDB records do not expose season metadata. Preserve the prior
+	// last/next fallback in that case, while still deduplicating with season
+	// results when both forms are present.
+	resolved = append(resolved, fallback...)
+	seen := make(map[string]struct{}, len(resolved))
+	filtered := make([]tmdbEpisode, 0, len(resolved))
+	for _, episode := range resolved {
+		if episode.ID <= 0 || episode.AirDate == "" || episode.AirDate < from || episode.AirDate > to {
 			continue
 		}
-		key := fmt.Sprintf("%d:%s", episode.ID, episode.AirDate)
+		key := fmt.Sprintf("%d:%s:%d:%d", id, episode.AirDate, episode.SeasonNumber, episode.EpisodeNumber)
 		if _, exists := seen[key]; exists {
 			continue
 		}
 		seen[key] = struct{}{}
-		episodes = append(episodes, *episode)
+		filtered = append(filtered, episode)
 	}
-	return episodes, nil
+	sort.SliceStable(filtered, func(left, right int) bool {
+		if filtered[left].AirDate != filtered[right].AirDate {
+			return filtered[left].AirDate < filtered[right].AirDate
+		}
+		if filtered[left].SeasonNumber != filtered[right].SeasonNumber {
+			return filtered[left].SeasonNumber < filtered[right].SeasonNumber
+		}
+		return filtered[left].EpisodeNumber < filtered[right].EpisodeNumber
+	})
+	return filtered, nil
 }
 
 func (s *TMDBService) calendar(ctx context.Context, request tmdbPluginRequest, pc PluginContext) (PluginCalendarPage, *PluginFault) {
@@ -795,26 +946,31 @@ func (s *TMDBService) calendar(ctx context.Context, request tmdbPluginRequest, p
 	if region != "" {
 		params["with_origin_country"] = region
 	}
+	upstreamSemaphore := make(chan struct{}, 8)
 	pageData, fault := s.fetchPaged(ctx, "/discover/tv", pc.Locale, params)
 	if fault != nil {
 		return PluginCalendarPage{}, fault
 	}
-	// Discover TV returns show-level records. Resolve each show's last/next
-	// episode so the calendar contains actual episode dates rather than the
+	// Discover TV returns show-level records. Resolve each show's season
+	// episodes so the calendar contains actual episode dates rather than the
 	// show's historical first_air_date (which can be decades outside the range).
 	items := make([]PluginCalendarCandidate, 0, resultLimit(request.Limit))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 8)
+	showSemaphore := make(chan struct{}, 8)
+	detailFailures := 0
 	for _, result := range pageData.Results {
 		result := result
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			episodes, err := s.calendarEpisodes(ctx, result.ID, pc.Locale)
+			showSemaphore <- struct{}{}
+			defer func() { <-showSemaphore }()
+			episodes, err := s.calendarEpisodes(ctx, result.ID, pc.Locale, request.From, request.To, upstreamSemaphore)
 			if err != nil {
+				mu.Lock()
+				detailFailures++
+				mu.Unlock()
 				return
 			}
 			candidate, ok := s.candidate(result, "tv", pc.Locale)
@@ -834,6 +990,10 @@ func (s *TMDBService) calendar(ctx context.Context, request tmdbPluginRequest, p
 					continue
 				}
 				candidateCopy := candidate
+				if candidate.Preview != nil {
+					previewCopy := *candidate.Preview
+					candidateCopy.Preview = &previewCopy
+				}
 				if candidateCopy.Preview != nil && episode.Name != "" {
 					candidateCopy.Preview.EpisodeInfo = fmt.Sprintf("S%dE%d", episode.SeasonNumber, episode.EpisodeNumber)
 				}
@@ -857,6 +1017,12 @@ func (s *TMDBService) calendar(ctx context.Context, request tmdbPluginRequest, p
 		}()
 	}
 	wg.Wait()
+	if ctx.Err() != nil {
+		return PluginCalendarPage{}, &PluginFault{Code: "EXECUTION_CANCELLED", Message: "TMDB 日历请求超时或已取消", Retryable: true, Status: http.StatusGatewayTimeout}
+	}
+	if len(pageData.Results) > 0 && len(items) == 0 && detailFailures == len(pageData.Results) {
+		return PluginCalendarPage{}, &PluginFault{Code: "UPSTREAM_ERROR", Message: "TMDB 日历剧集排播查询失败", Retryable: true, Status: http.StatusBadGateway}
+	}
 	sort.SliceStable(items, func(left, right int) bool {
 		if items[left].Calendar.AirDate != items[right].Calendar.AirDate {
 			return items[left].Calendar.AirDate < items[right].Calendar.AirDate
@@ -868,7 +1034,7 @@ func (s *TMDBService) calendar(ctx context.Context, request tmdbPluginRequest, p
 	if len(items) > limit {
 		items = items[:limit]
 	}
-	return PluginCalendarPage{Items: items, Total: total, HasMore: false}, nil
+	return PluginCalendarPage{Items: items, Total: total, NextCursor: nextCursor(page, pageData.TotalPages), HasMore: pageData.TotalPages > page}, nil
 }
 
 func (s *TMDBService) lookupDetail(ctx context.Context, id, locale string) (*tmdbDetail, string, *PluginFault) {
