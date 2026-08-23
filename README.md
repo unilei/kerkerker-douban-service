@@ -144,6 +144,9 @@ HTTP 模式需要在服务器的 `douban.env` 中配置：
 KERKERKER_JOB_REPORT=http
 KERKERKER_JOB_REPORT_URL=https://your-host.example/api/plugins/jobs/report
 KERKERKER_JOB_REPORT_TOKEN=replace-with-the-same-dedicated-host-secret
+# 可选：跨进程持久化未确认事件，重启后自动重放；目录需可由 refresh 用户写入。
+KERKERKER_JOB_REPORT_SPOOL=/var/lib/kerkerker/job-report/events.jsonl
+KERKERKER_JOB_REPORT_SPOOL_MAX_BYTES=67108864
 KERKERKER_JOB_ID=content.refresh.daily
 KERKERKER_PLUGIN_ID=kerkerker.douban-content
 KERKERKER_PLUGIN_VERSION=1.0.0
@@ -152,7 +155,7 @@ KERKERKER_PLUGIN_CONFIG_VERSION=runtime
 KERKERKER_JOB_ACTOR=system/refresh
 ```
 
-每次运行先发送 `sequence=0` 的 `started`，再发送累计进度和终态；`event_id` 固定为 `<run_id>:<sequence>`。`metadata.job_id` 是稳定作业标识，默认 `content.refresh.daily`，可通过 `KERKERKER_JOB_ID` 覆盖，必须匹配 `^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$`，且不能使用保留值 `legacy.external-report`。该保留值仅供 Web 在 v1 接收旧发送端缺少 `job_id` 时内部映射；当前 Go 发送端始终发送并校验该字段。HTTP 临时错误、`409` 和限流最多重试三次，重定向不会跟随，响应体不会写入日志。远程 URL 必须使用 HTTPS；只有 `localhost`、`127.0.0.1` 和 `::1` 可以使用 HTTP。上报最终失败只记录脱敏警告，不阻断影片刷新；当前没有跨进程持久 spool，因此宿主允许序号跳跃，但不会允许状态或累计进度倒退。
+每次运行先发送 `sequence=0` 的 `started`，再发送累计进度和终态；`event_id` 固定为 `<run_id>:<sequence>`。`metadata.job_id` 是稳定作业标识，默认 `content.refresh.daily`，可通过 `KERKERKER_JOB_ID` 覆盖，必须匹配 `^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$`，且不能使用保留值 `legacy.external-report`。该保留值仅供 Web 在 v1 接收旧发送端缺少 `job_id` 时内部映射；当前 Go 发送端始终发送并校验该字段。HTTP 临时错误、`409` 和限流最多重试三次，重定向不会跟随，响应体不会写入日志。远程 URL 必须使用 HTTPS；只有 `localhost`、`127.0.0.1` 和 `::1` 可以使用 HTTP。设置 `KERKERKER_JOB_REPORT_SPOOL` 后，每个事件会先以 0600 权限追加并 fsync 到本地 JSONL，确认成功后移除；进程重启会先按序重放未确认事件，超过上限则保留并报警，不阻断影片刷新。
 
 Web 宿主必须配置同一个独立 `KERKERKER_JOB_REPORT_TOKEN`。密钥必须是 32–512 位 URL-safe 字符，建议使用 `openssl rand -hex 32` 生成；不要复用管理员密码、会话密钥、Admin API Key 或其它 cron 密钥。该接入目前提供持久进度可见性，不提供宿主远程取消或刷新断点恢复。
 

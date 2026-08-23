@@ -54,15 +54,33 @@ func main() {
 		sinks = append(sinks, jobreport.NewJSONLinesSink(os.Stdout))
 	}
 	if reportMode == "http" || reportMode == "both" {
-		httpSink, err := jobreport.NewHTTPSink(
-			os.Getenv("KERKERKER_JOB_REPORT_URL"),
-			os.Getenv("KERKERKER_JOB_REPORT_TOKEN"),
-			nil,
-		)
-		if err != nil {
-			log.Fatal().Err(err).Msg("Invalid HTTP job report configuration")
+		endpoint := os.Getenv("KERKERKER_JOB_REPORT_URL")
+		token := os.Getenv("KERKERKER_JOB_REPORT_TOKEN")
+		spoolPath := strings.TrimSpace(os.Getenv("KERKERKER_JOB_REPORT_SPOOL"))
+		if spoolPath != "" {
+			maxSpoolBytes := int64(64 * 1024 * 1024)
+			if raw := strings.TrimSpace(os.Getenv("KERKERKER_JOB_REPORT_SPOOL_MAX_BYTES")); raw != "" {
+				parsed, parseErr := strconv.ParseInt(raw, 10, 64)
+				if parseErr != nil || parsed < 1 {
+					log.Fatal().Msg("KERKERKER_JOB_REPORT_SPOOL_MAX_BYTES must be a positive integer")
+				}
+				maxSpoolBytes = parsed
+			}
+			spooledSink, err := jobreport.NewDurableHTTPSink(endpoint, token, spoolPath, nil, maxSpoolBytes)
+			if err != nil {
+				log.Fatal().Err(err).Msg("Invalid durable HTTP job report configuration")
+			}
+			if err := spooledSink.Replay(); err != nil {
+				log.Warn().Err(err).Msg("Failed to replay durable job report spool; refresh will continue")
+			}
+			sinks = append(sinks, spooledSink)
+		} else {
+			httpSink, err := jobreport.NewHTTPSink(endpoint, token, nil)
+			if err != nil {
+				log.Fatal().Err(err).Msg("Invalid HTTP job report configuration")
+			}
+			sinks = append(sinks, httpSink)
 		}
-		sinks = append(sinks, httpSink)
 	}
 	if reportMode != "" && reportMode != "stdout" && reportMode != "http" && reportMode != "both" {
 		log.Fatal().Str("mode", reportMode).Msg("KERKERKER_JOB_REPORT must be stdout, http, or both")
