@@ -63,7 +63,17 @@ type PluginCandidate struct {
 	Overview     []PluginLocalized   `json:"overview,omitempty"`
 	ReleaseDate  string              `json:"releaseDate,omitempty"`
 	Region       string              `json:"region,omitempty"`
+	Catalog      *PluginCatalog      `json:"catalog,omitempty"`
 	Provenance   PluginProvenance    `json:"provenance"`
+}
+
+type PluginCatalog struct {
+	Section *PluginCatalogSection `json:"section,omitempty"`
+}
+
+type PluginCatalogSection struct {
+	Key    string            `json:"key"`
+	Titles []PluginLocalized `json:"titles"`
 }
 
 type PluginLocalized struct {
@@ -405,41 +415,91 @@ func (s *TMDBService) fetchPaged(ctx context.Context, path, locale string, param
 	return page, nil
 }
 
-func (s *TMDBService) catalog(ctx context.Context, request tmdbPluginRequest, pc PluginContext) (PluginPage, *PluginFault) {
-	requestedKind := ""
-	if request.Filters.ContentType == "movie" || request.Filters.ContentType == "series" {
-		if request.Filters.ContentType == "series" {
-			requestedKind = "tv"
+func requestedCatalogKind(request tmdbPluginRequest) string {
+	if request.Filters.ContentType == "movie" {
+		return "movie"
+	}
+	if request.Filters.ContentType == "series" {
+		return "tv"
+	}
+	if request.Key == "series" || request.Category == "series" {
+		return "tv"
+	}
+	if request.Key == "movies" || request.Category == "movies" {
+		return "movie"
+	}
+	switch firstNonEmptyPlugin(request.Key, request.Category) {
+	case "hot_movies", "in_theaters", "documentary", "top250":
+		return "movie"
+	case "hot_tv", "us_tv", "jp_tv", "kr_tv", "anime", "variety":
+		return "tv"
+	default:
+		return ""
+	}
+}
+
+func catalogSection(key, locale string) *PluginCatalog {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil
+	}
+	title := key
+	switch key {
+	case "movies":
+		if strings.HasPrefix(strings.ToLower(locale), "zh") {
+			title = "电影"
 		} else {
-			requestedKind = "movie"
+			title = "Movies"
 		}
-	} else if request.Key == "series" || request.Category == "series" {
-		requestedKind = "tv"
-	} else if request.Key == "movies" || request.Category == "movies" {
-		requestedKind = "movie"
-	} else {
-		switch firstNonEmptyPlugin(request.Key, request.Category) {
-		case "hot_movies", "in_theaters", "documentary":
-			requestedKind = "movie"
-		case "hot_tv", "us_tv", "jp_tv", "kr_tv", "anime", "variety":
-			requestedKind = "tv"
+	case "series":
+		if strings.HasPrefix(strings.ToLower(locale), "zh") {
+			title = "电视剧"
+		} else {
+			title = "TV Shows"
+		}
+	case "latest-movies":
+		if strings.HasPrefix(strings.ToLower(locale), "zh") {
+			title = "最新电影"
+		} else {
+			title = "Latest Movies"
+		}
+	case "latest-series":
+		if strings.HasPrefix(strings.ToLower(locale), "zh") {
+			title = "最新剧集"
+		} else {
+			title = "Latest TV Shows"
+		}
+	case "top250":
+		if strings.HasPrefix(strings.ToLower(locale), "zh") {
+			title = "TMDB 高分榜 250"
+		} else {
+			title = "TMDB Top Rated 250"
 		}
 	}
+	return &PluginCatalog{Section: &PluginCatalogSection{
+		Key:    key,
+		Titles: []PluginLocalized{{Locale: locale, Value: title}},
+	}}
+}
+
+func annotateCatalogSection(candidate PluginCandidate, key, locale string) PluginCandidate {
+	candidate.Catalog = catalogSection(key, locale)
+	return candidate
+}
+
+func (s *TMDBService) catalogForKind(ctx context.Context, request tmdbPluginRequest, pc PluginContext, kind, sectionKey string) (PluginPage, *PluginFault) {
 	view := request.View
 	if view == "" {
 		view = "category"
 	}
 	page := pageNumber(request.Cursor)
 	params := map[string]string{"page": strconv.Itoa(page), "include_adult": "false"}
-	path := ""
-	fallbackKind := ""
+	path := "/" + kind + "/popular"
+	fallbackKind := kind
+	key := firstNonEmptyPlugin(request.Key, request.Category)
 	if view == "latest" || view == "new-releases" {
-		if requestedKind == "" {
-			requestedKind = "movie"
-		}
-		fallbackKind = requestedKind
-		path = "/discover/" + requestedKind
-		if requestedKind == "tv" {
+		path = "/discover/" + kind
+		if kind == "tv" {
 			params["sort_by"] = "first_air_date.desc"
 			if request.Filters.Year != "" {
 				params["first_air_date_year"] = request.Filters.Year
@@ -450,20 +510,12 @@ func (s *TMDBService) catalog(ctx context.Context, request tmdbPluginRequest, pc
 				params["primary_release_year"] = request.Filters.Year
 			}
 		}
-	} else if requestedKind == "" {
-		trend := "day"
-		if view == "featured" {
-			trend = "week"
-		}
-		path = "/trending/all/" + trend
 	} else {
-		fallbackKind = requestedKind
-		key := firstNonEmptyPlugin(request.Key, request.Category)
 		switch key {
 		case "in_theaters":
 			path = "/movie/now_playing"
 		case "us_tv", "jp_tv", "kr_tv", "anime", "variety", "documentary":
-			path = "/discover/" + requestedKind
+			path = "/discover/" + kind
 			params["sort_by"] = "popularity.desc"
 			switch key {
 			case "us_tv":
@@ -480,8 +532,6 @@ func (s *TMDBService) catalog(ctx context.Context, request tmdbPluginRequest, pc
 			case "documentary":
 				params["with_genres"] = "99"
 			}
-		default:
-			path = "/" + requestedKind + "/popular"
 		}
 	}
 	if request.Filters.Region != "" {
@@ -504,6 +554,9 @@ func (s *TMDBService) catalog(ctx context.Context, request tmdbPluginRequest, pc
 	for _, result := range pageData.Results {
 		candidate, ok := s.candidate(result, fallbackKind, pc.Locale)
 		if ok {
+			if sectionKey != "" {
+				candidate = annotateCatalogSection(candidate, sectionKey, pc.Locale)
+			}
 			items = append(items, candidate)
 		}
 		if len(items) >= resultLimit(request.Limit) {
@@ -511,6 +564,140 @@ func (s *TMDBService) catalog(ctx context.Context, request tmdbPluginRequest, pc
 		}
 	}
 	return PluginPage{Items: items, Total: pageData.TotalResults, NextCursor: nextCursor(page, pageData.TotalPages), HasMore: pageData.TotalPages > page}, nil
+}
+
+func mergeCatalogPages(left, right PluginPage, limit int) PluginPage {
+	items := make([]PluginCandidate, 0, limit)
+	seen := make(map[string]struct{}, len(left.Items)+len(right.Items))
+	for _, page := range []PluginPage{left, right} {
+		for _, item := range page.Items {
+			id := ""
+			if len(item.ExternalRefs) > 0 {
+				id = item.ExternalRefs[0].ProviderID + ":" + item.ExternalRefs[0].ExternalID
+			}
+			if id != "" {
+				if _, exists := seen[id]; exists {
+					continue
+				}
+				seen[id] = struct{}{}
+			}
+			items = append(items, item)
+			if len(items) >= limit {
+				break
+			}
+		}
+		if len(items) >= limit {
+			break
+		}
+	}
+	return PluginPage{
+		Items:      items,
+		Total:      left.Total + right.Total,
+		HasMore:    left.HasMore || right.HasMore,
+		NextCursor: firstNonEmptyPlugin(left.NextCursor, right.NextCursor),
+	}
+}
+
+func (s *TMDBService) mixedCatalog(ctx context.Context, request tmdbPluginRequest, pc PluginContext, sectioned bool) (PluginPage, *PluginFault) {
+	limit := resultLimit(request.Limit)
+	partRequest := request
+	partRequest.Limit = (limit + 1) / 2
+	leftKey, rightKey := "", ""
+	if sectioned {
+		leftKey, rightKey = "latest-movies", "latest-series"
+	}
+	left, leftFault := s.catalogForKind(ctx, partRequest, pc, "movie", leftKey)
+	if leftFault != nil {
+		return PluginPage{}, leftFault
+	}
+	right, rightFault := s.catalogForKind(ctx, partRequest, pc, "tv", rightKey)
+	if rightFault != nil {
+		return PluginPage{}, rightFault
+	}
+	return mergeCatalogPages(left, right, limit), nil
+}
+
+func (s *TMDBService) top250(ctx context.Context, request tmdbPluginRequest, pc PluginContext) (PluginPage, *PluginFault) {
+	const totalLimit = 250
+	const providerPageSize = 20
+	const pageCount = (totalLimit + providerPageSize - 1) / providerPageSize
+	items := make([]PluginCandidate, 0, totalLimit)
+	seen := make(map[string]struct{}, totalLimit)
+	for page := 1; page <= pageCount; page++ {
+		pageData, fault := s.fetchPaged(ctx, "/movie/top_rated", pc.Locale, map[string]string{
+			"page":           strconv.Itoa(page),
+			"include_adult":  "false",
+			"vote_count.gte": "200",
+		})
+		if fault != nil {
+			return PluginPage{}, fault
+		}
+		for _, result := range pageData.Results {
+			candidate, ok := s.candidate(result, "movie", pc.Locale)
+			if !ok || len(candidate.ExternalRefs) == 0 {
+				continue
+			}
+			id := candidate.ExternalRefs[0].ExternalID
+			if _, exists := seen[id]; exists {
+				continue
+			}
+			seen[id] = struct{}{}
+			items = append(items, annotateCatalogSection(candidate, "top250", pc.Locale))
+			if len(items) >= totalLimit {
+				break
+			}
+		}
+		if len(items) >= totalLimit || len(pageData.Results) == 0 {
+			break
+		}
+	}
+	return PluginPage{Items: items, Total: len(items), HasMore: false}, nil
+}
+
+func (s *TMDBService) catalog(ctx context.Context, request tmdbPluginRequest, pc PluginContext) (PluginPage, *PluginFault) {
+	view := request.View
+	if view == "" {
+		view = "category"
+	}
+	key := firstNonEmptyPlugin(request.Key, request.Category)
+	if key == "top250" {
+		return s.top250(ctx, request, pc)
+	}
+	requestedKind := requestedCatalogKind(request)
+	if requestedKind == "" && (view == "latest" || view == "new-releases") {
+		return s.mixedCatalog(ctx, request, pc, view == "new-releases")
+	}
+	if requestedKind == "" {
+		trend := "day"
+		if view == "featured" {
+			trend = "week"
+		}
+		page := pageNumber(request.Cursor)
+		pageData, fault := s.fetchPaged(ctx, "/trending/all/"+trend, pc.Locale, map[string]string{
+			"page":          strconv.Itoa(page),
+			"include_adult": "false",
+		})
+		if fault != nil {
+			return PluginPage{}, fault
+		}
+		items := make([]PluginCandidate, 0, resultLimit(request.Limit))
+		for _, result := range pageData.Results {
+			candidate, ok := s.candidate(result, "", pc.Locale)
+			if ok {
+				items = append(items, candidate)
+			}
+			if len(items) >= resultLimit(request.Limit) {
+				break
+			}
+		}
+		return PluginPage{Items: items, Total: pageData.TotalResults, NextCursor: nextCursor(page, pageData.TotalPages), HasMore: pageData.TotalPages > page}, nil
+	}
+	sectionKey := ""
+	if view == "sections" && (key == "movies" || key == "series") {
+		sectionKey = key
+	}
+	request.View = view
+	return s.catalogForKind(ctx, request, pc, requestedKind, sectionKey)
 }
 
 func firstNonEmptyPlugin(values ...string) string {

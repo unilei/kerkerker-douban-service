@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -46,6 +48,125 @@ func TestInvokePluginCatalogUsesServerSideKeyAndProviderDTO(t *testing.T) {
 	}
 	if strings.Contains(string(mustJSON(t, result)), "upstream-secret") {
 		t.Fatal("TMDB API key leaked in plugin response")
+	}
+}
+
+func TestInvokePluginCatalogAnnotatesMovieAndSeriesSections(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload string
+		switch r.URL.Path {
+		case "/3/movie/popular":
+			payload = `{"page":1,"total_pages":1,"total_results":1,"results":[{"id":101,"title":"Movie","poster_path":"/movie.jpg"}]}`
+		case "/3/tv/popular":
+			payload = `{"page":1,"total_pages":1,"total_results":1,"results":[{"id":202,"name":"Series","poster_path":"/series.jpg"}]}`
+		default:
+			t.Fatalf("unexpected section path: %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer upstream.Close()
+
+	service := NewTMDBService([]string{"secret"}, upstream.URL+"/3", "https://image.tmdb.org/t/p/original")
+	for _, tc := range []struct {
+		key       string
+		wantType  string
+		wantTitle string
+	}{
+		{key: "movies", wantType: "movie", wantTitle: "Movies"},
+		{key: "series", wantType: "series", wantTitle: "TV Shows"},
+	} {
+		request, _ := json.Marshal(tmdbPluginRequest{View: "sections", Key: tc.key, Limit: 20})
+		result, fault := service.InvokePlugin(context.Background(), "content.catalog", "catalog", request, PluginContext{RequestID: "section-" + tc.key, Profile: "en-default", Locale: "en-US"})
+		if fault != nil {
+			t.Fatalf("unexpected section fault for %s: %+v", tc.key, fault)
+		}
+		page, ok := result.(PluginPage)
+		if !ok || len(page.Items) != 1 {
+			t.Fatalf("unexpected section result for %s: %#v", tc.key, result)
+		}
+		if page.Items[0].Type != tc.wantType || page.Items[0].Catalog == nil || page.Items[0].Catalog.Section == nil {
+			t.Fatalf("missing section metadata for %s: %#v", tc.key, page.Items[0])
+		}
+		section := page.Items[0].Catalog.Section
+		if section.Key != tc.key || len(section.Titles) != 1 || section.Titles[0].Value != tc.wantTitle {
+			t.Fatalf("unexpected section metadata for %s: %#v", tc.key, section)
+		}
+	}
+}
+
+func TestInvokePluginCatalogLatestMixesMovieAndSeriesWithSections(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload string
+		switch r.URL.Path {
+		case "/3/discover/movie":
+			payload = `{"page":1,"total_pages":1,"total_results":1,"results":[{"id":303,"title":"Latest Movie","release_date":"2026-08-01"}]}`
+		case "/3/discover/tv":
+			payload = `{"page":1,"total_pages":1,"total_results":1,"results":[{"id":404,"name":"Latest Series","first_air_date":"2026-08-02"}]}`
+		default:
+			t.Fatalf("unexpected latest path: %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer upstream.Close()
+
+	service := NewTMDBService([]string{"secret"}, upstream.URL+"/3", "https://image.tmdb.org/t/p/original")
+	request, _ := json.Marshal(tmdbPluginRequest{View: "new-releases", Limit: 20})
+	result, fault := service.InvokePlugin(context.Background(), "content.catalog", "catalog", request, PluginContext{RequestID: "latest-mixed", Profile: "en-default", Locale: "en-US"})
+	if fault != nil {
+		t.Fatalf("unexpected mixed latest fault: %+v", fault)
+	}
+	page, ok := result.(PluginPage)
+	if !ok || len(page.Items) != 2 {
+		t.Fatalf("unexpected mixed latest result: %#v", result)
+	}
+	sections := map[string]bool{}
+	for _, item := range page.Items {
+		if item.Catalog == nil || item.Catalog.Section == nil {
+			t.Fatalf("latest item is missing section metadata: %#v", item)
+		}
+		sections[item.Catalog.Section.Key] = true
+	}
+	if !sections["latest-movies"] || !sections["latest-series"] {
+		t.Fatalf("expected latest movie and series sections, got %v", sections)
+	}
+}
+
+func TestInvokePluginCatalogTop250AggregatesTMDBTopRatedPages(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/3/movie/top_rated" {
+			t.Fatalf("unexpected Top250 path: %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("vote_count.gte"); got != "200" {
+			t.Fatalf("unexpected vote count filter: %q", got)
+		}
+		page, err := strconv.Atoi(r.URL.Query().Get("page"))
+		if err != nil || page < 1 || page > 13 {
+			t.Fatalf("unexpected Top250 page: %q", r.URL.Query().Get("page"))
+		}
+		results := make([]tmdbMediaResult, 20)
+		for index := range results {
+			id := (page-1)*20 + index + 1
+			results[index] = tmdbMediaResult{ID: id, Title: fmt.Sprintf("Movie %03d", id)}
+		}
+		_ = json.NewEncoder(w).Encode(tmdbPaged{Page: page, TotalPages: 13, TotalResults: 260, Results: results})
+	}))
+	defer upstream.Close()
+
+	service := NewTMDBService([]string{"secret"}, upstream.URL+"/3", "https://image.tmdb.org/t/p/original")
+	request, _ := json.Marshal(tmdbPluginRequest{View: "category", Key: "top250", Limit: 20})
+	result, fault := service.InvokePlugin(context.Background(), "content.catalog", "catalog", request, PluginContext{RequestID: "top250", Profile: "en-default", Locale: "en-US"})
+	if fault != nil {
+		t.Fatalf("unexpected Top250 fault: %+v", fault)
+	}
+	page, ok := result.(PluginPage)
+	if !ok || len(page.Items) != 250 || page.Total != 250 || page.HasMore {
+		t.Fatalf("unexpected Top250 result: items=%d total=%d hasMore=%v", len(page.Items), page.Total, page.HasMore)
+	}
+	if got := page.Items[0].ExternalRefs[0].ExternalID; got != "1" {
+		t.Fatalf("unexpected first Top250 item: %s", got)
+	}
+	if got := page.Items[249].ExternalRefs[0].ExternalID; got != "250" {
+		t.Fatalf("unexpected last Top250 item: %s", got)
 	}
 }
 
